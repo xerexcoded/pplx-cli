@@ -1,4 +1,4 @@
-# Perplexity but in you terminal
+# Perplexity but in your terminal
 # ==============================
 
 ![usage](./image.png)
