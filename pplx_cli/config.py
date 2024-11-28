@@ -46,15 +46,40 @@ class PerplexityModel(str, Enum):
 
 class Config:
     API_ENDPOINT = "https://api.perplexity.ai/chat/completions"
-    API_KEY = load_api_key()
-    DEFAULT_MODEL = PerplexityModel.LARGE
     TIMEOUT = 30  # seconds
+    DEFAULT_MODEL = PerplexityModel.LARGE
+
+    def __init__(self):
+        self.api_key = load_api_key()
+        self.model = self.DEFAULT_MODEL
+
+    @classmethod
+    def get_instance(cls):
+        if not hasattr(cls, '_instance'):
+            cls._instance = cls()
+        return cls._instance
+
+    @property
+    def api_endpoint(self):
+        return self.API_ENDPOINT
+
+    @property
+    def timeout(self):
+        return self.TIMEOUT
+
+    @property
+    def API_KEY(self):
+        return self.api_key
+
+    @API_KEY.setter
+    def API_KEY(self, value):
+        self.api_key = value
 
     @classmethod
     def get_model_info(cls, model: PerplexityModel) -> dict:
         model_info = {
             PerplexityModel.SMALL: {"parameters": "8B", "context_length": 127072},
             PerplexityModel.LARGE: {"parameters": "70B", "context_length": 127072},
-            PerplexityModel.HUGE: {"parameters": "405B", "context_length": 127072},
+            PerplexityModel.HUGE: {"parameters": "175B", "context_length": 127072}
         }
         return model_info.get(model, {})

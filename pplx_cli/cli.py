@@ -21,52 +21,39 @@ def get_masked_input(prompt: str = "Enter password: ") -> str:
     sys.stdout.write(prompt)
     sys.stdout.flush()
 
-    # Save the terminal settings
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
     try:
-        # Set the terminal to raw mode
         tty.setraw(sys.stdin.fileno())
         
         while True:
             char = sys.stdin.read(1)
             
-            # Handle backspace
-            if char in ('\x7f', '\x08'):  # backspace in unix/windows
+            if char == '\r' or char == '\n':
+                sys.stdout.write('\n')
+                break
+            
+            if char == '\x03':  # Ctrl+C
+                raise KeyboardInterrupt
+            
+            if char == '\x7f':  # Backspace
                 if password:
                     password.pop()
-                    # Erase the last asterisk
-                    sys.stdout.write('\b \b')
+                    sys.stdout.write('\b \b')  # Erase character
                     sys.stdout.flush()
-                continue
-                
-            # Handle enter/return
-            if char in ('\r', '\n'):
-                sys.stdout.write('\n')
-                sys.stdout.flush()
-                break
-                
-            # Handle ctrl+c
-            if char == '\x03':
-                raise KeyboardInterrupt
-                
-            # Handle regular characters
-            if char.isprintable():
+            else:
                 password.append(char)
                 sys.stdout.write('*')
                 sys.stdout.flush()
                 
     finally:
-        # Restore terminal settings
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
         
     return ''.join(password)
 
 @app.command()
 def setup():
-    """
-    Configure your Perplexity API key.
-    """
+    """Configure your Perplexity API key."""
     try:
         api_key = get_masked_input("Please enter your Perplexity API key: ")
         
@@ -83,12 +70,13 @@ def setup():
 
 def ensure_api_key():
     """Check if API key is configured and prompt for it if not."""
-    if not Config.API_KEY:
+    config = Config.get_instance()
+    if not config.api_key:
         typer.echo("No API key found. Please set up your API key first.")
         setup()
         # Reload the configuration after setup
-        Config.API_KEY = load_api_key()
-        if not Config.API_KEY:
+        config.api_key = load_api_key()
+        if not config.api_key:
             typer.echo("Failed to save API key", err=True)
             raise typer.Exit(1)
 
@@ -102,42 +90,27 @@ def ask(
         help="Model to use for the query (small, large, huge)",
         case_sensitive=False
     ),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose output"),
-    max_retries: int = typer.Option(3, "--max-retries", "-r", help="Maximum number of retries on failure"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose output")
 ):
-    """
-    Ask a question to Perplexity AI and get a response.
-    """
-    ensure_api_key()
-    
-    if verbose:
-        typer.echo(f"Using model: {model if model else 'default'}")
-        typer.echo(f"Sending query to Perplexity AI: {query}")
+    """Ask a question to Perplexity AI and get a response."""
+    try:
+        ensure_api_key()
+        
+        selected_model = get_model_from_name(model) if model else None
+        
+        if verbose:
+            typer.echo(f"Using model: {selected_model.value if selected_model else Config.get_instance().model.value}")
+        
+        typer.echo("Querying Perplexity AI...")
+        response = query_perplexity(query, selected_model)
+        
+        typer.echo(f"Answer: {response}")
+    except Exception as e:
+        typer.echo(f"Error: {str(e)}", err=True)
+        raise typer.Exit(1)
 
-    selected_model = get_model_from_name(model) if model else None
-    
-    for attempt in range(max_retries):
-        try:
-            typer.echo("Querying Perplexity AI...")
-            answer = query_perplexity(query, selected_model)
-            typer.echo(f"Answer: {answer}")
-            return
-        except Exception as e:
-            if attempt < max_retries - 1:
-                typer.echo(f"An error occurred (attempt {attempt + 1}/{max_retries}): {str(e)}", err=True)
-                typer.echo("Retrying...")
-            else:
-                typer.echo(f"Failed after {max_retries} attempts. Last error: {str(e)}", err=True)
-                raise typer.Exit(code=1)
-
-@app.command()
+@app.command(name="list-models")
 def list_models():
-    """
-    List all available Perplexity AI models and their specifications.
-    """
-    typer.echo("Available Models:")
+    """List all available Perplexity AI models."""
     for model in PerplexityModel:
-        info = Config.get_model_info(model)
-        typer.echo(f"\n{model.value}:")
-        typer.echo(f"  Parameters: {info['parameters']}")
-        typer.echo(f"  Context Length: {info['context_length']}")
+        typer.echo(f"{model.name.lower()}: {model.value}")
