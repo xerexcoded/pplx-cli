@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - main
+    paths:
+      - 'pplx_cli/**'
+      - 'pyproject.toml'
+      - 'poetry.lock'
   release:
     types:
       - created
@@ -32,6 +36,7 @@ jobs:
   publish:
     needs: test  # Only run if tests pass
     runs-on: ubuntu-latest
+    if: github.event_name == 'release' || contains(github.event.head_commit.message, 'bump version')
     steps:
       - uses: actions/checkout@v3
       
@@ -52,8 +57,4 @@ jobs:
         run: poetry install
       
       - name: Build and publish
-        run: |
-          poetry build
-          poetry publish
-        env:
-          POETRY_PYPI_TOKEN_PYPI: ${{ secrets.PYPI_TOKEN }}
+        run: poetry publish --build
