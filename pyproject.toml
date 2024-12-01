@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "pplx-cli"
-version = "0.1.2"
-description = "A command-line interface for Perplexity AI API"
+version = "0.1.3"
+description = "A command-line notes and RAG interface for Perplexity AI API"
 authors = ["xerexcoded <arnavbanerjee61@gmail.com>"]
 readme = "README.md"
 homepage = "https://github.com/xerexcoded/pplx-cli"
