@@ -26,9 +26,19 @@ git clone https://github.com/xerexcoded/pplx-cli.git
 cd pplx-cli
 ```
 
-2. Install using Poetry:
+2. Install dependencies:
 ```bash
 poetry install
+```
+
+3. Build the package:
+```bash
+poetry build
+```
+
+4. Install the package:
+```bash
+pip install dist/*.whl
 ```
 
 ## Setup
