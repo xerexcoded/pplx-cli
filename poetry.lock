@@ -125,6 +125,23 @@ files = [
 colorama = {version = "*", markers = "platform_system == \"Windows\""}
 
 [[package]]
+name = "click-default-group"
+version = "1.2.4"
+description = "click_default_group"
+optional = false
+python-versions = ">=2.7"
+files = [
+    {file = "click_default_group-1.2.4-py2.py3-none-any.whl", hash = "sha256:9b60486923720e7fc61731bdb32b617039aba820e22e1c88766b1125592eaa5f"},
+    {file = "click_default_group-1.2.4.tar.gz", hash = "sha256:eb3f3c99ec0d456ca6cd2a7f08f7d4e91771bef51b01bdd9580cc6450fe1251e"},
+]
+
+[package.dependencies]
+click = "*"
+
+[package.extras]
+test = ["pytest"]
+
+[[package]]
 name = "colorama"
 version = "0.4.6"
 description = "Cross-platform colored terminal text."
@@ -204,6 +221,20 @@ pluggy = ">=0.12,<2.0"
 testing = ["argcomplete", "attrs (>=19.2.0)", "hypothesis (>=3.56)", "mock", "nose", "pygments (>=2.7.2)", "requests", "setuptools", "xmlschema"]
 
 [[package]]
+name = "python-dateutil"
+version = "2.9.0.post0"
+description = "Extensions to the standard Python datetime module"
+optional = false
+python-versions = "!=3.0.*,!=3.1.*,!=3.2.*,>=2.7"
+files = [
+    {file = "python-dateutil-2.9.0.post0.tar.gz", hash = "sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3"},
+    {file = "python_dateutil-2.9.0.post0-py2.py3-none-any.whl", hash = "sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427"},
+]
+
+[package.dependencies]
+six = ">=1.5"
+
+[[package]]
 name = "python-dotenv"
 version = "1.0.1"
 description = "Read key-value pairs from a .env file and set them as environment variables"
@@ -254,6 +285,71 @@ requests = ">=2.22,<3"
 
 [package.extras]
 fixture = ["fixtures"]
+
+[[package]]
+name = "six"
+version = "1.16.0"
+description = "Python 2 and 3 compatibility utilities"
+optional = false
+python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*"
+files = [
+    {file = "six-1.16.0-py2.py3-none-any.whl", hash = "sha256:8abb2f1d86890a2dfb989f9a77cfcfd3e47c2a354b01111771326f8aa26e0254"},
+    {file = "six-1.16.0.tar.gz", hash = "sha256:1e61c37477a1626458e36f7b1d82aa5c9b094fa4802892072e49de9c60c4c926"},
+]
+
+[[package]]
+name = "sqlite-fts4"
+version = "1.0.3"
+description = "Python functions for working with SQLite FTS4 search"
+optional = false
+python-versions = "*"
+files = [
+    {file = "sqlite-fts4-1.0.3.tar.gz", hash = "sha256:78b05eeaf6680e9dbed8986bde011e9c086a06cb0c931b3cf7da94c214e8930c"},
+    {file = "sqlite_fts4-1.0.3-py3-none-any.whl", hash = "sha256:0359edd8dea6fd73c848989e1e2b1f31a50fe5f9d7272299ff0e8dbaa62d035f"},
+]
+
+[package.extras]
+test = ["pytest"]
+
+[[package]]
+name = "sqlite-utils"
+version = "3.38"
+description = "CLI tool and Python library for manipulating SQLite databases"
+optional = false
+python-versions = ">=3.8"
+files = [
+    {file = "sqlite_utils-3.38-py3-none-any.whl", hash = "sha256:8a27441015c3b2ef475f555861f7a2592f73bc60d247af9803a11b65fc605bf9"},
+    {file = "sqlite_utils-3.38.tar.gz", hash = "sha256:1ae77b931384052205a15478d429464f6c67a3ac3b4eafd3c674ac900f623aab"},
+]
+
+[package.dependencies]
+click = "*"
+click-default-group = ">=1.2.3"
+pluggy = "*"
+python-dateutil = "*"
+sqlite-fts4 = "*"
+tabulate = "*"
+
+[package.extras]
+docs = ["beanbag-docutils (>=2.0)", "codespell", "furo", "pygments-csv-lexer", "sphinx-autobuild", "sphinx-copybutton"]
+flake8 = ["flake8"]
+mypy = ["data-science-types", "mypy", "types-click", "types-pluggy", "types-python-dateutil", "types-tabulate"]
+test = ["black (>=24.1.1)", "cogapp", "hypothesis", "pytest"]
+tui = ["trogon"]
+
+[[package]]
+name = "tabulate"
+version = "0.9.0"
+description = "Pretty-print tabular data"
+optional = false
+python-versions = ">=3.7"
+files = [
+    {file = "tabulate-0.9.0-py3-none-any.whl", hash = "sha256:024ca478df22e9340661486f85298cff5f6dcdba14f3813e8830015b9ed1948f"},
+    {file = "tabulate-0.9.0.tar.gz", hash = "sha256:0095b12bf5966de529c0feb1fa08671671b3368eec77d7ef7ab114be2c068b3c"},
+]
+
+[package.extras]
+widechars = ["wcwidth"]
 
 [[package]]
 name = "typer"
@@ -307,4 +403,4 @@ zstd = ["zstandard (>=0.18.0)"]
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.12"
-content-hash = "7776eade4cafa79baaf0892c2bfe5cc071d12baa6ebf61df93ee87f62d3519bf"
+content-hash = "496f08c4edbc9739e7c00a31334ba5fd7f7439f7070e077e4de25d8d0de739ca"
