@@ -52,6 +52,7 @@ class Config:
     def __init__(self):
         self.api_key = load_api_key()
         self.model = self.DEFAULT_MODEL
+        self.notes_dir = Path.home() / ".local" / "share" / "perplexity" / "notes"
 
     @classmethod
     def get_instance(cls):

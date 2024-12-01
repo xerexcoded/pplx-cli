@@ -4,8 +4,12 @@ import getpass
 import sys
 import tty
 import termios
+import json
 from .api import query_perplexity
 from .config import PerplexityModel, Config, save_api_key, load_api_key
+from pathlib import Path
+from typing import Optional, List
+from .notes import NotesDB
 
 app = typer.Typer()
 
@@ -114,3 +118,77 @@ def list_models():
     """List all available Perplexity AI models."""
     for model in PerplexityModel:
         typer.echo(f"{model.name.lower()}: {model.value}")
+
+@app.command()
+def note(
+    title: str = typer.Option(..., "--title", "-t", help="Title of the note"),
+    content: str = typer.Option(..., "--content", "-c", help="Content of the note"),
+    tags: Optional[List[str]] = typer.Option(None, "--tag", help="Tags for the note"),
+    directory: Optional[Path] = typer.Option(
+        None, "--dir", "-d", 
+        help="Directory to store notes (default: ~/.local/share/perplexity/notes)"
+    )
+):
+    """Add a new note."""
+    config = Config.get_instance()
+    notes_dir = directory or config.notes_dir
+    db = NotesDB(notes_dir)
+    
+    note_id = db.add_note(title, content, tags)
+    typer.echo(f"✨ Note saved successfully with ID: {note_id} ✨")
+
+@app.command()
+def list_notes(
+    tag: Optional[str] = typer.Option(None, "--tag", "-t", help="Filter notes by tag"),
+    directory: Optional[Path] = typer.Option(
+        None, "--dir", "-d",
+        help="Directory to read notes from (default: ~/.local/share/perplexity/notes)"
+    )
+):
+    """List all notes."""
+    config = Config.get_instance()
+    notes_dir = directory or config.notes_dir
+    db = NotesDB(notes_dir)
+    
+    notes = db.list_notes(tag)
+    if not notes:
+        typer.echo("No notes found.")
+        return
+    
+    for note in notes:
+        tags = json.loads(note['tags'])
+        tag_str = f" [Tags: {', '.join(tags)}]" if tags else ""
+        typer.echo(f"\nID: {note['id']}{tag_str}")
+        typer.echo(f"Title: {note['title']}")
+        typer.echo(f"Created: {note['created_at']}")
+        typer.echo("-" * 40)
+
+@app.command()
+def view_note(
+    note_id: int = typer.Argument(..., help="ID of the note to view"),
+    directory: Optional[Path] = typer.Option(
+        None, "--dir", "-d",
+        help="Directory to read notes from (default: ~/.local/share/perplexity/notes)"
+    )
+):
+    """View a specific note by its ID."""
+    config = Config.get_instance()
+    notes_dir = directory or config.notes_dir
+    db = NotesDB(notes_dir)
+    
+    note = db.get_note(note_id)
+    if not note:
+        typer.echo(f"Note with ID {note_id} not found.")
+        raise typer.Exit(1)
+    
+    tags = json.loads(note['tags'])
+    tag_str = f" [Tags: {', '.join(tags)}]" if tags else ""
+    
+    typer.echo(f"\n📝 Note {note_id}{tag_str}")
+    typer.echo("=" * 40)
+    typer.echo(f"Title: {note['title']}")
+    typer.echo(f"Created: {note['created_at']}")
+    typer.echo(f"Updated: {note['updated_at']}")
+    typer.echo("-" * 40)
+    typer.echo(f"Content:\n{note['content']}")
+    typer.echo("=" * 40)
