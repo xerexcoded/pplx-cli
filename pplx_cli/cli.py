@@ -192,3 +192,53 @@ def view_note(
     typer.echo("-" * 40)
     typer.echo(f"Content:\n{note['content']}")
     typer.echo("=" * 40)
+
+@app.command()
+def ask_notes(
+    query: str = typer.Argument(..., help="The question to ask about your notes"),
+    top_k: int = typer.Option(3, "--top", "-k", help="Number of most relevant notes to consider"),
+    directory: Optional[Path] = typer.Option(
+        None, "--dir", "-d",
+        help="Directory to read notes from (default: ~/.local/share/perplexity/notes)"
+    )
+):
+    """Ask questions about your notes using RAG."""
+    config = Config.get_instance()
+    notes_dir = directory or config.notes_dir
+    db = NotesDB(notes_dir)
+    
+    # Find relevant notes
+    similar_notes = db.search_similar_notes(query, top_k=top_k)
+    
+    if not similar_notes:
+        typer.echo("No relevant notes found.")
+        return
+    
+    # Prepare context from similar notes
+    context = "\n\n".join([
+        f"Note {note['id']} - {note['title']}:\n{note['content']}"
+        for note, similarity in similar_notes
+    ])
+    
+    # Prepare the prompt with context
+    prompt = f"""Based on the following notes, please answer this question: {query}
+
+Relevant Notes:
+{context}
+
+Please provide a comprehensive answer based solely on the information in these notes."""
+    
+    # Get response from Perplexity AI
+    try:
+        response = query_perplexity(prompt)
+        
+        # Print the response with relevant note references
+        typer.echo("\n🤖 Answer based on your notes:")
+        typer.echo("=" * 40)
+        typer.echo(response)
+        typer.echo("\n📚 Based on these notes:")
+        for note, similarity in similar_notes:
+            typer.echo(f"- Note {note['id']}: {note['title']} (relevance: {similarity:.2f})")
+    except Exception as e:
+        typer.echo(f"Error getting response: {str(e)}")
+        raise typer.Exit(1)

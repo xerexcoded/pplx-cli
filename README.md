@@ -1,110 +1,105 @@
 # Perplexity CLI
 
-A command-line interface for interacting with the Perplexity AI API. Ask questions and get answers directly from your terminal!
+A command-line interface for interacting with Perplexity AI, with local note-taking and AI-powered search capabilities.
+
+![pplx-cli](image.png)
 
 ## Features
 
-- 🚀 Easy to use CLI interface
-- 🔑 Secure API key management
-- 🔄 Multiple model support
-- ⚡ Fast and efficient responses
-- 🛠️ Configurable settings
+- 🤖 Direct interaction with Perplexity AI models
+- 📝 Local note-taking system with tags
+- 🔍 AI-powered semantic search across your notes
+- � RAG (Retrieval Augmented Generation) for context-aware answers
+- � Secure API key management
+- 🎯 Multiple model support (small, large, huge)
 
 ## Installation
-
-### Using pip (Recommended)
 
 ```bash
 pip install pplx-cli
 ```
 
-### From Source
+## Configuration
 
-1. Clone the repository:
-```bash
-git clone https://github.com/xerexcoded/pplx-cli.git
-cd pplx-cli
-```
+Set up your Perplexity API key:
 
-2. Install dependencies:
-```bash
-poetry install
-```
-
-3. Build the package:
-```bash
-poetry build
-```
-
-4. Install the package:
-```bash
-pip install dist/*.whl
-```
-
-## Setup
-
-Before using the CLI, you need to configure your Perplexity API key:
-
-1. Get your API key from [Perplexity AI](https://docs.perplexity.ai)
-2. Run the setup command:
 ```bash
 perplexity setup
 ```
 
+Or set the environment variable:
+```bash
+export PERPLEXITY_API_KEY='your-api-key'
+```
+
 ## Usage
 
-### Ask a Question
-
+### Basic AI Interaction
 ```bash
-perplexity ask "What is quantum computing?"
-```
+# Ask a question
+perplexity ask "What is Python?"
 
-### Select a Specific Model
-
-```bash
-perplexity ask "Explain neural networks" --model large
-```
-
-Available models:
-- `small` (8B parameters)
-- `large` (70B parameters)
-- `huge` (405B parameters)
-
-### Additional Options
-
-- Use verbose output:
-```bash
-perplexity ask "Your question" -v
-```
-
-- Set custom retry attempts:
-```bash
-perplexity ask "Your question" -r 5
-```
-
-### List Available Models
-
-```bash
+# List available models
 perplexity list-models
+
+# Use a specific model
+perplexity ask "What is Python?" --model large
 ```
 
-## Development
-
-1. Clone the repository
-2. Install dependencies:
+### Note Management
 ```bash
-poetry install
+# Add a note
+perplexity note --title "Python Tips" --content "List comprehension syntax: [x for x in list]" --tag python
+
+# List all notes
+perplexity list-notes
+
+# List notes with specific tag
+perplexity list-notes --tag python
+
+# View a specific note
+perplexity view-note 1
 ```
 
-3. Activate the virtual environment:
+### AI-Powered Note Search (RAG)
 ```bash
-poetry shell
+# Ask questions about your notes
+perplexity ask-notes "How do I use list comprehension?"
+
+# Customize number of relevant notes to consider
+perplexity ask-notes "What are Python tips?" --top 5
 ```
 
-4. Make your changes and test:
+### Custom Notes Directory
+All commands support a custom notes directory:
 ```bash
-poetry run perplexity ask "Test question"
+perplexity note --title "Meeting Notes" --content "..." --dir ~/my-notes
+perplexity ask-notes "What was discussed?" --dir ~/my-notes
 ```
+
+## Features in Detail
+
+### Note Storage
+- Notes are stored locally in SQLite database
+- Each note includes title, content, tags, and timestamps
+- Automatic embedding generation for semantic search
+- Default location: `~/.local/share/perplexity/notes`
+
+### RAG Implementation
+- Uses lightweight MiniLM model (22MB) for embeddings
+- Lazy loading to minimize resource usage
+- Vector similarity search for finding relevant notes
+- Fallback mechanisms for resource-constrained environments
+
+### Available Models
+- `small`: llama-3.1-sonar-small-128k-online (8B parameters)
+- `large`: llama-3.1-sonar-large-128k-online (70B parameters)
+- `huge`: llama-3.1-sonar-huge-128k-online (175B parameters)
+
+## Requirements
+- Python 3.12 or higher
+- Internet connection for AI features
+- ~25MB disk space for embedding model
 
 ## Contributing
 
@@ -112,9 +107,4 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-- Built with [Typer](https://typer.tiangolo.com/)
-- Powered by [Perplexity AI](https://www.perplexity.ai/)
+This project is licensed under the MIT License - see the LICENSE file for details.
