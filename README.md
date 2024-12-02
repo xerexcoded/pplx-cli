@@ -1,17 +1,14 @@
 # Perplexity CLI
 
-A command-line interface for interacting with Perplexity AI, with local note-taking and AI-powered search capabilities.
-
-![pplx-cli](image.png)
+A command-line interface for interacting with Perplexity AI's API, featuring chat history management, note-taking, and AI search capabilities.
 
 ## Features
 
 - 🤖 Direct interaction with Perplexity AI models
-- 📝 Local note-taking system with tags
-- 🔍 AI-powered semantic search across your notes
-- � RAG (Retrieval Augmented Generation) for context-aware answers
-- � Secure API key management
-- 🎯 Multiple model support (small, large, huge)
+- 📝 Local note-taking with AI-powered search
+- 💬 Comprehensive chat history management
+- 📊 Conversation analytics and statistics
+- 📤 Multiple export formats (Markdown, JSON, Excel)
 
 ## Installation
 
@@ -28,78 +25,117 @@ perplexity setup
 ```
 
 Or set the environment variable:
+
 ```bash
 export PERPLEXITY_API_KEY='your-api-key'
 ```
 
 ## Usage
 
-### Basic AI Interaction
+### Basic Commands
+
+Ask a question:
 ```bash
-# Ask a question
-perplexity ask "What is Python?"
+perplexity ask "What is the capital of France?"
 
-# List available models
+# With a topic
+perplexity ask "What are the main differences between Python lists and tuples?" --topic programming
+```
+
+List available models:
+```bash
 perplexity list-models
+```
 
-# Use a specific model
-perplexity ask "What is Python?" --model large
+### Chat History Management
+
+View chat history:
+```bash
+perplexity history
+```
+
+Show detailed chat statistics:
+```bash
+perplexity chat-stats
+```
+
+View a specific conversation:
+```bash
+perplexity show-chat <conversation-id>
+```
+
+Export a conversation:
+```bash
+# Export to markdown
+perplexity export-chat <conversation-id> --format markdown -o conversation.md
+
+# Export to JSON
+perplexity export-chat <conversation-id> --format json -o conversation.json
+```
+
+Export all conversations:
+```bash
+# Export to Excel
+perplexity export-all --format excel -o chat_history.xlsx
+
+# Export to JSON
+perplexity export-all --format json -o chat_history.json
 ```
 
 ### Note Management
+
+Create a note:
 ```bash
-# Add a note
-perplexity note --title "Python Tips" --content "List comprehension syntax: [x for x in list]" --tag python
-
-# List all notes
-perplexity list-notes
-
-# List notes with specific tag
-perplexity list-notes --tag python
-
-# View a specific note
-perplexity view-note 1
+perplexity note "My note content" --title "My Note" --tags "tag1,tag2"
 ```
 
-### AI-Powered Note Search (RAG)
+List notes:
 ```bash
-# Ask questions about your notes
-perplexity ask-notes "How do I use list comprehension?"
-
-# Customize number of relevant notes to consider
-perplexity ask-notes "What are Python tips?" --top 5
+perplexity notes
 ```
 
-### Custom Notes Directory
-All commands support a custom notes directory:
+View a note:
 ```bash
-perplexity note --title "Meeting Notes" --content "..." --dir ~/my-notes
-perplexity ask-notes "What was discussed?" --dir ~/my-notes
+perplexity show-note <note-id>
+```
+
+Search notes:
+```bash
+perplexity search-notes "search query"
 ```
 
 ## Features in Detail
 
-### Note Storage
-- Notes are stored locally in SQLite database
-- Each note includes title, content, tags, and timestamps
-- Automatic embedding generation for semantic search
-- Default location: `~/.local/share/perplexity/notes`
+### Chat History Features
 
-### RAG Implementation
-- Uses lightweight MiniLM model (22MB) for embeddings
-- Lazy loading to minimize resource usage
-- Vector similarity search for finding relevant notes
-- Fallback mechanisms for resource-constrained environments
+- **Conversation Tracking**: Automatically saves all conversations with timestamps
+- **Topic Organization**: Add topics to conversations for better organization
+- **Rich Statistics**: View detailed statistics about your chat history
+- **Flexible Export Options**: Export conversations in multiple formats
+  - Markdown: Great for documentation
+  - JSON: Perfect for data analysis
+  - Excel: Ideal for spreadsheet analysis
+  - CSV: Simple tabular format
 
-### Available Models
-- `small`: llama-3.1-sonar-small-128k-online (8B parameters)
-- `large`: llama-3.1-sonar-large-128k-online (70B parameters)
-- `huge`: llama-3.1-sonar-huge-128k-online (175B parameters)
+### Note-Taking Features
 
-## Requirements
-- Python 3.12 or higher
-- Internet connection for AI features
-- ~25MB disk space for embedding model
+- **Local Storage**: All notes are stored locally
+- **Tag Support**: Organize notes with tags
+- **AI-Powered Search**: Find notes using natural language queries
+- **Markdown Support**: Write notes in markdown format
+
+## Development
+
+Clone the repository:
+```bash
+git clone https://github.com/yourusername/pplx-cli.git
+cd pplx-cli
+```
+
+Install dependencies:
+```bash
+pip install -e .
+```
 
 ## Contributing
 

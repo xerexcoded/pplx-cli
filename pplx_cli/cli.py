@@ -10,6 +10,7 @@ from .config import PerplexityModel, Config, save_api_key, load_api_key
 from pathlib import Path
 from typing import Optional, List
 from .notes import NotesDB
+from .chat_history import ChatHistoryDB
 
 app = typer.Typer()
 
@@ -63,14 +64,14 @@ def setup():
         
         if not api_key:
             typer.echo("API key cannot be empty", err=True)
-            raise typer.Exit(1)
+            raise typer.Exit(code=1)
         
         save_api_key(api_key)
         typer.echo("\n✨ API key saved successfully! ✨", color=typer.colors.GREEN)
         typer.echo("You can now use the Perplexity CLI to ask questions.\n")
     except KeyboardInterrupt:
         typer.echo("\nSetup cancelled.", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(code=1)
 
 def ensure_api_key():
     """Check if API key is configured and prompt for it if not."""
@@ -82,11 +83,12 @@ def ensure_api_key():
         config.api_key = load_api_key()
         if not config.api_key:
             typer.echo("Failed to save API key", err=True)
-            raise typer.Exit(1)
+            raise typer.Exit(code=1)
 
 @app.command()
 def ask(
     query: str = typer.Argument(..., help="The question to ask Perplexity AI"),
+    topic: str = typer.Option(None, "--topic", "-t", help="Topic for the conversation"),
     model: str = typer.Option(
         None,
         "--model",
@@ -94,7 +96,8 @@ def ask(
         help="Model to use for the query (small, large, huge)",
         case_sensitive=False
     ),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose output")
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose output"),
+    save_history: bool = typer.Option(True, "--save-history/--no-save-history", help="Save the conversation to history")
 ):
     """Ask a question to Perplexity AI and get a response."""
     try:
@@ -108,10 +111,17 @@ def ask(
         typer.echo("Querying Perplexity AI...")
         response = query_perplexity(query, selected_model)
         
+        # Save to chat history if enabled
+        if save_history:
+            db = ChatHistoryDB()
+            conversation_id = db.create_conversation(title=query[:50] + "..." if len(query) > 50 else query, topic=topic)
+            db.add_message(conversation_id, "user", query)
+            db.add_message(conversation_id, "assistant", response)
+        
         typer.echo(f"Answer: {response}")
     except Exception as e:
         typer.echo(f"Error: {str(e)}", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(code=1)
 
 @app.command(name="list-models")
 def list_models():
@@ -179,7 +189,7 @@ def view_note(
     note = db.get_note(note_id)
     if not note:
         typer.echo(f"Note with ID {note_id} not found.")
-        raise typer.Exit(1)
+        raise typer.Exit(code=1)
     
     tags = json.loads(note['tags'])
     tag_str = f" [Tags: {', '.join(tags)}]" if tags else ""
@@ -241,4 +251,150 @@ Please provide a comprehensive answer based solely on the information in these n
             typer.echo(f"- Note {note['id']}: {note['title']} (relevance: {similarity:.2f})")
     except Exception as e:
         typer.echo(f"Error getting response: {str(e)}")
-        raise typer.Exit(1)
+        raise typer.Exit(code=1)
+
+@app.command(name="history")
+def list_history(
+    topic: Optional[str] = typer.Option(None, "--topic", "-t", help="Filter conversations by topic"),
+    search: Optional[str] = typer.Option(None, "--search", "-s", help="Search conversations by content")
+):
+    """List chat history."""
+    db = ChatHistoryDB()
+    
+    if search:
+        conversations = db.search_conversations(search)
+    else:
+        conversations = db.list_conversations(topic)
+    
+    if not conversations:
+        typer.echo("No conversations found.")
+        return
+    
+    for conv in conversations:
+        typer.echo(f"\nID: {conv['id']}")
+        typer.echo(f"Title: {conv['title']}")
+        if conv['topic']:
+            typer.echo(f"Topic: {conv['topic']}")
+        typer.echo(f"Created: {conv['created_at']}")
+        typer.echo("-" * 40)
+
+@app.command(name="show-chat")
+def show_conversation(
+    conversation_id: int = typer.Argument(..., help="ID of the conversation to view")
+):
+    """View a specific conversation."""
+    db = ChatHistoryDB()
+    conversation = db.get_conversation(conversation_id)
+    
+    if not conversation:
+        typer.echo(f"Conversation {conversation_id} not found.")
+        return
+    
+    typer.echo(f"\n📝 Conversation {conversation_id}")
+    typer.echo("=" * 40)
+    typer.echo(f"Title: {conversation['title']}")
+    if conversation['topic']:
+        typer.echo(f"Topic: {conversation['topic']}")
+    typer.echo(f"Created: {conversation['created_at']}")
+    typer.echo("-" * 40)
+    
+    for msg in conversation['messages']:
+        typer.echo(f"\n[{msg['role'].upper()}] ({msg['timestamp']})")
+        typer.echo(msg['content'])
+    typer.echo("=" * 40)
+
+@app.command(name="export-chat")
+def export_conversation(
+    conversation_id: int = typer.Argument(..., help="ID of the conversation to export"),
+    format: str = typer.Option("markdown", "--format", "-f", help="Export format (markdown, json, txt, csv, excel)"),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output file path")
+):
+    """Export a conversation to a file."""
+    db = ChatHistoryDB()
+    
+    try:
+        content = db.export_conversation(conversation_id, format)
+        
+        if output:
+            output.parent.mkdir(parents=True, exist_ok=True)
+            if format == "excel":
+                with open(output, "wb") as f:
+                    f.write(content)
+            else:
+                output.write_text(content)
+            typer.echo(f"Conversation exported to {output}")
+        else:
+            if format == "excel":
+                typer.echo("Excel format requires an output file path")
+                raise typer.Exit(code=1)
+            typer.echo(content)
+            
+    except Exception as e:
+        typer.echo(f"Error exporting conversation: {str(e)}", err=True)
+        raise typer.Exit(code=1)
+
+@app.command(name="export-all")
+def export_all_conversations(
+    format: str = typer.Option("excel", "--format", "-f", help="Export format (excel, csv)"),
+    output: Path = typer.Option(..., "--output", "-o", help="Output file path")
+):
+    """Export all conversations to a file."""
+    db = ChatHistoryDB()
+    
+    try:
+        content = db.export_all_conversations(format)
+        
+        output.parent.mkdir(parents=True, exist_ok=True)
+        if format == "excel":
+            with open(output, "wb") as f:
+                f.write(content)
+        else:
+            output.write_text(content)
+        
+        typer.echo(f"All conversations exported to {output}")
+    except Exception as e:
+        typer.echo(f"Error exporting conversations: {str(e)}", err=True)
+        raise typer.Exit(code=1)
+
+@app.command(name="chat-stats")
+def show_chat_stats():
+    """Show statistics about your chat history."""
+    db = ChatHistoryDB()
+    
+    try:
+        stats = db.get_conversation_stats()
+        
+        typer.echo("\n📊 Chat History Statistics")
+        typer.echo("=" * 40)
+        
+        total_conversations = len(stats)
+        
+        if total_conversations == 0:
+            typer.echo("No conversations found in history.")
+            return
+            
+        total_messages = int(stats['message_count'].sum())
+        avg_messages_per_conv = float(stats['message_count'].mean())
+        avg_message_length = float(stats['avg_message_length'].mean())
+        
+        typer.echo(f"Total Conversations: {total_conversations}")
+        typer.echo(f"Total Messages: {total_messages}")
+        typer.echo(f"Average Messages per Conversation: {avg_messages_per_conv:.1f}")
+        typer.echo(f"Average Message Length: {int(avg_message_length)} characters")
+        
+        if total_conversations > 0:
+            typer.echo("\nTop 5 Most Active Conversations:")
+            typer.echo("-" * 40)
+            
+            top_conversations = stats.nlargest(5, 'message_count')
+            for _, row in top_conversations.iterrows():
+                typer.echo(
+                    f"ID: {row['conversation_id']} | "
+                    f"Title: {row['title']} | "
+                    f"Messages: {int(row['message_count'])} | "
+                    f"Created: {row['created_at']}"
+                )
+        
+    except Exception as e:
+        typer.echo(f"Error getting statistics: {str(e)}", err=True)
+        raise typer.Exit(code=1)
