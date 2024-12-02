@@ -12,76 +12,39 @@ on:
     types:
       - created
 
-permissions:
-  contents: write
-  packages: write
-
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.12'
-      
+
       - name: Install Poetry
         run: |
           curl -sSL https://install.python-poetry.org | python3 -
       
       - name: Install dependencies
         run: poetry install --with test
-      
+
       - name: Run tests
         run: poetry run pytest
 
-  create-release:
-    needs: test
-    runs-on: ubuntu-latest
-    if: contains(github.event.head_commit.message, 'release')
-    permissions:
-      contents: write
-    outputs:
-      version: ${{ steps.get-version.outputs.version }}
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Get version from pyproject.toml
-        id: get-version
-        run: |
-          version=$(grep "^version = " pyproject.toml | cut -d'"' -f2)
-          echo "version=$version" >> $GITHUB_OUTPUT
-
-      - name: Create Release
-        id: create_release
-        uses: softprops/action-gh-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: v${{ steps.get-version.outputs.version }}
-          name: Release v${{ steps.get-version.outputs.version }}
-          body: |
-            Release version ${{ steps.get-version.outputs.version }}
-            
-            Changes in this release:
-            ${{ github.event.head_commit.message }}
-          draft: false
-          prerelease: false
-
   publish:
-    needs: [test, create-release]
+    needs: test  # Only run if tests pass
     runs-on: ubuntu-latest
-    if: contains(github.event.head_commit.message, 'release')
+    if: github.event_name == 'release' || contains(github.event.head_commit.message, 'bump version')
     steps:
       - uses: actions/checkout@v3
-      
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.12'
-      
+
       - name: Install Poetry
         run: |
           curl -sSL https://install.python-poetry.org | python3 -
@@ -92,6 +55,6 @@ jobs:
       
       - name: Install dependencies
         run: poetry install
-      
+
       - name: Build and publish
         run: poetry publish --build
