@@ -22,13 +22,13 @@ def test_query_perplexity(requests_mock):
             ]
         }
     )
-    response = query_perplexity("test question", PerplexityModel.SMALL)
+    response = query_perplexity("test question", PerplexityModel.SONAR)
     assert response == "Test response"
 
 @pytest.mark.parametrize("model", [
-    PerplexityModel.SMALL,
-    PerplexityModel.LARGE,
-    PerplexityModel.HUGE,
+    PerplexityModel.SONAR,
+    PerplexityModel.SONAR_REASONING,
+    PerplexityModel.SONAR_DEEP_RESEARCH,
     None
 ])
 def test_query_perplexity_models(requests_mock, model):
