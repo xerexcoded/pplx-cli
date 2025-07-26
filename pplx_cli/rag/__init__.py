@@ -5,14 +5,17 @@ This module provides enhanced retrieval capabilities using sqlite-vec for fast v
 BGE embeddings for better quality, and hybrid search combining semantic and keyword search.
 """
 
-from .database import RagDB
-from .embeddings import EmbeddingModel
-from .search import HybridSearchEngine
+from .database import RagDB, ContentType
+from .embeddings import EmbeddingModel, get_embedding_model
+from .search import HybridSearchEngine, SearchMode
 from .indexer import BatchIndexer
 
 __all__ = [
     "RagDB",
-    "EmbeddingModel", 
+    "ContentType", 
+    "EmbeddingModel",
+    "get_embedding_model",
     "HybridSearchEngine",
+    "SearchMode",
     "BatchIndexer"
 ]

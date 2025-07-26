@@ -397,7 +397,8 @@ class HybridSearchEngine:
         """
         try:
             # Get the source document content
-            with self.rag_db.db_path.open() as conn:
+            import sqlite3
+            with sqlite3.connect(self.rag_db.db_path) as conn:
                 cursor = conn.execute(f"""
                     SELECT content FROM {self.rag_db.table_name}
                     WHERE source_id = ? AND content_type = ?

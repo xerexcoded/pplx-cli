@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "pplx-cli"
-version = "0.1.9"
+version = "0.2.0"
 description = "A command-line notes and RAG interface for Perplexity AI API"
 authors = ["xerexcoded <arnavbanerjee61@gmail.com>"]
 readme = "README.md"
@@ -28,11 +28,8 @@ sentence-transformers = "^3.0.0"
 sqlite-utils = "^3.35"
 typer = "^0.9.0"
 openpyxl = "^3.1.5"
-sqlite-vec = "^0.1.0"
-langchain-community = "^0.2.0"
 transformers = "^4.40.0"
 torch = "^2.0.0"
-faiss-cpu = "^1.8.0"
 
 [tool.poetry.group.test.dependencies]
 pytest = "^7.4.0"

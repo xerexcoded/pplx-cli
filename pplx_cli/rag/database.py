@@ -14,9 +14,6 @@ from datetime import datetime
 from enum import Enum
 import numpy as np
 
-from langchain_community.vectorstores import SQLiteVec
-from langchain_community.embeddings.sentence_transformer import SentenceTransformerEmbeddings
-
 from .embeddings import get_embedding_model, EmbeddingModel
 
 logger = logging.getLogger(__name__)
@@ -89,7 +86,7 @@ class RagDB:
         # Initialize the database
         self._init_database()
         
-        # Initialize LangChain SQLiteVec for vector operations
+        # Initialize sqlite-vec for vector operations
         self._init_vector_store()
         
         logger.info(f"Initialized RagDB at {self.db_path}")
@@ -165,35 +162,31 @@ class RagDB:
             """)
     
     def _init_vector_store(self):
-        """Initialize the LangChain SQLiteVec vector store."""
+        """Initialize sqlite-vec vector storage."""
         try:
-            # Create a LangChain-compatible embedding function
-            class EmbeddingFunction:
-                def __init__(self, model: EmbeddingModel):
-                    self.model = model
+            with sqlite3.connect(self.db_path) as conn:
+                # Create vectors table for storing embeddings
+                conn.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {self.table_name}_vectors (
+                        id INTEGER PRIMARY KEY,
+                        document_id INTEGER NOT NULL,
+                        embedding BLOB NOT NULL,
+                        FOREIGN KEY (document_id) REFERENCES {self.table_name}(id) ON DELETE CASCADE
+                    )
+                """)
                 
-                def embed_documents(self, texts: List[str]) -> List[List[float]]:
-                    embeddings = self.model.encode(texts, use_cache=False)
-                    return embeddings.tolist()
-                
-                def embed_query(self, text: str) -> List[float]:
-                    embedding = self.model.encode(text, use_cache=True)
-                    return embedding.tolist()
+                # Create index for faster vector lookups
+                conn.execute(f"""
+                    CREATE INDEX IF NOT EXISTS idx_{self.table_name}_vectors_doc_id 
+                    ON {self.table_name}_vectors(document_id)
+                """)
             
-            embedding_function = EmbeddingFunction(self.embedding_model)
-            
-            # Initialize SQLiteVec
-            self.vector_store = SQLiteVec(
-                table=self.table_name + "_vectors",
-                db_file=str(self.db_path),
-                embedding=embedding_function
-            )
-            
+            self.vector_store_available = True
             logger.info("Vector store initialized successfully")
             
         except Exception as e:
             logger.error(f"Failed to initialize vector store: {e}")
-            self.vector_store = None
+            self.vector_store_available = False
     
     def _chunk_text(self, text: str) -> List[str]:
         """
@@ -274,25 +267,22 @@ class RagDB:
                 document_ids.append(document_id)
         
         # Add to vector store if available
-        if self.vector_store and chunks:
+        if self.vector_store_available and chunks:
             try:
-                metadatas = [
-                    {
-                        "content_type": content_type.value,
-                        "source_id": source_id,
-                        "chunk_index": i,
-                        "document_id": doc_id,
-                        **(metadata or {})
-                    }
-                    for i, doc_id in enumerate(document_ids)
-                ]
+                # Generate embeddings for chunks
+                embeddings = self.embedding_model.encode(chunks, use_cache=False)
                 
-                self.vector_store.add_texts(
-                    texts=chunks,
-                    metadatas=metadatas
-                )
+                with sqlite3.connect(self.db_path) as conn:
+                    for doc_id, embedding in zip(document_ids, embeddings):
+                        # Store embedding as binary data
+                        embedding_blob = embedding.astype(np.float32).tobytes()
+                        
+                        conn.execute(f"""
+                            INSERT INTO {self.table_name}_vectors (document_id, embedding)
+                            VALUES (?, ?)
+                        """, (doc_id, embedding_blob))
                 
-                logger.debug(f"Added {len(chunks)} chunks to vector store")
+                logger.debug(f"Added {len(chunks)} embeddings to vector store")
                 
             except Exception as e:
                 logger.error(f"Failed to add to vector store: {e}")
@@ -386,44 +376,67 @@ class RagDB:
         Returns:
             List of (document, similarity_score) tuples
         """
-        if not self.vector_store:
+        if not self.vector_store_available:
             logger.warning("Vector store not available, falling back to keyword search")
             return self.keyword_search(query, content_types, limit)
         
         try:
-            # Perform vector search
-            results = self.vector_store.similarity_search_with_score(
-                query, k=limit * 2  # Get more to allow for filtering
-            )
+            # Generate query embedding
+            query_embedding = self.embedding_model.encode(query, use_cache=True)
             
-            filtered_results = []
-            
-            for doc, score in results:
-                # Filter by content type if specified
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                
+                # Build the SQL query
+                base_query = f"""
+                    SELECT d.*, v.embedding
+                    FROM {self.table_name} d
+                    JOIN {self.table_name}_vectors v ON d.id = v.document_id
+                """
+                
+                params = []
+                
+                # Add content type filter
                 if content_types:
-                    doc_content_type = doc.metadata.get("content_type")
-                    if doc_content_type not in [ct.value for ct in content_types]:
+                    content_type_values = [ct.value for ct in content_types]
+                    placeholders = ",".join("?" * len(content_type_values))
+                    base_query += f" WHERE d.content_type IN ({placeholders})"
+                    params.extend(content_type_values)
+                
+                base_query += " ORDER BY d.created_at DESC"
+                
+                cursor = conn.execute(base_query, params)
+                results = []
+                
+                for row in cursor.fetchall():
+                    # Deserialize embedding
+                    embedding_blob = row["embedding"]
+                    embedding = np.frombuffer(embedding_blob, dtype=np.float32)
+                    
+                    # Calculate cosine similarity
+                    similarity = float(np.dot(query_embedding, embedding) / 
+                                     (np.linalg.norm(query_embedding) * np.linalg.norm(embedding)))
+                    
+                    # Filter by similarity threshold
+                    if similarity < similarity_threshold:
                         continue
+                    
+                    # Parse metadata
+                    metadata = json.loads(row["metadata"] or "{}")
+                    
+                    document_data = {
+                        "content": row["content"],
+                        "metadata": metadata,
+                        "content_type": row["content_type"],
+                        "source_id": row["source_id"],
+                        "chunk_index": row["chunk_index"]
+                    }
+                    
+                    results.append((document_data, similarity))
                 
-                # Filter by similarity threshold
-                if score < similarity_threshold:
-                    continue
-                
-                # Convert to our format
-                document_data = {
-                    "content": doc.page_content,
-                    "metadata": doc.metadata,
-                    "content_type": doc.metadata.get("content_type"),
-                    "source_id": doc.metadata.get("source_id"),
-                    "chunk_index": doc.metadata.get("chunk_index", 0)
-                }
-                
-                filtered_results.append((document_data, float(score)))
-                
-                if len(filtered_results) >= limit:
-                    break
-            
-            return filtered_results
+                # Sort by similarity score (descending) and limit
+                results.sort(key=lambda x: x[1], reverse=True)
+                return results[:limit]
             
         except Exception as e:
             logger.error(f"Vector search failed: {e}")
@@ -562,10 +575,8 @@ class RagDB:
                 conn.execute(f"DELETE FROM {self.table_name}_fts")
                 
                 # Clear vector store if available
-                if self.vector_store:
-                    # Note: SQLiteVec doesn't have a clear method, 
-                    # so we'd need to recreate the table
-                    pass
+                if self.vector_store_available:
+                    conn.execute(f"DELETE FROM {self.table_name}_vectors")
                 
                 logger.info("Cleared all data from RAG database")
                 return True

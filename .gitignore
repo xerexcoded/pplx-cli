@@ -1,3 +1,6 @@
 .env
 pplx_cli/CLAUDE.md
 pplx_cli/__pycache__/
+pplx_cli/migrations/__pycache__/
+pplx_cli/rag/__pycache__/
+tests/__pycache__/
