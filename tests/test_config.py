@@ -22,14 +22,14 @@ def test_load_api_key_from_env(monkeypatch, temp_config_dir):
     assert loaded_key == test_key
 
 def test_model_enum():
-    assert PerplexityModel.SMALL.value == "llama-3.1-sonar-small-128k-online"
-    assert PerplexityModel.LARGE.value == "llama-3.1-sonar-large-128k-online"
-    assert PerplexityModel.HUGE.value == "llama-3.1-sonar-huge-128k-online"
+    assert PerplexityModel.SONAR.value == "sonar"
+    assert PerplexityModel.SONAR_REASONING.value == "sonar-reasoning"
+    assert PerplexityModel.SONAR_DEEP_RESEARCH.value == "sonar-deep-research"
 
 def test_config_initialization():
     config = Config()
     assert isinstance(config.model, PerplexityModel)
-    assert config.model == PerplexityModel.LARGE
+    assert config.model == PerplexityModel.SONAR
     assert hasattr(config, 'api_key')
 
 def test_file_permissions(temp_config_dir):

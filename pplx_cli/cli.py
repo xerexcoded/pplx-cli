@@ -15,10 +15,16 @@ from .chat_history import ChatHistoryDB
 app = typer.Typer()
 
 def get_model_from_name(name: str) -> Optional[PerplexityModel]:
-    try:
-        return PerplexityModel[name.upper()]
-    except KeyError:
+    model_mapping = {
+        "small": PerplexityModel.SONAR,
+        "large": PerplexityModel.SONAR_REASONING, 
+        "huge": PerplexityModel.SONAR_DEEP_RESEARCH
+    }
+    
+    model = model_mapping.get(name.lower())
+    if model is None:
         raise typer.BadParameter(f"Model must be one of: small, large, huge")
+    return model
 
 def get_masked_input(prompt: str = "Enter password: ") -> str:
     """Get password input with asterisk masking."""
