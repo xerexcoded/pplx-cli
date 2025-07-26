@@ -4,6 +4,7 @@ import os
 import json
 from pathlib import Path
 from dotenv import load_dotenv
+import toml
 
 load_dotenv()
 
@@ -34,6 +35,22 @@ def save_api_key(api_key: str) -> None:
         json.dump(config, f)
     # Set file permissions to be readable only by the user
     CONFIG_FILE.chmod(0o600)
+
+def get_version() -> str:
+    """Get the version from pyproject.toml."""
+    try:
+        # Get the project root directory (where pyproject.toml is located)
+        project_root = Path(__file__).parent.parent
+        pyproject_path = project_root / "pyproject.toml"
+        
+        if pyproject_path.exists():
+            with open(pyproject_path, 'r') as f:
+                pyproject_data = toml.load(f)
+                return pyproject_data.get("tool", {}).get("poetry", {}).get("version", "unknown")
+        else:
+            return "unknown"
+    except Exception:
+        return "unknown"
 
 class PerplexityModel(str, Enum):
     SONAR = "sonar"

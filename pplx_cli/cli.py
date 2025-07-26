@@ -6,7 +6,7 @@ import tty
 import termios
 import json
 from .api import query_perplexity
-from .config import PerplexityModel, Config, save_api_key, load_api_key
+from .config import PerplexityModel, Config, save_api_key, load_api_key, get_version
 from pathlib import Path
 from typing import Optional, List
 from .notes import NotesDB
@@ -15,7 +15,24 @@ from .chat_history import ChatHistoryDB
 # Import new RAG components
 from .rag import RagDB, ContentType, HybridSearchEngine, SearchMode, BatchIndexer, get_embedding_model
 
+def version_callback(value: bool):
+    """Callback for --version flag."""
+    if value:
+        version_str = get_version()
+        typer.echo(f"Perplexity CLI version {version_str}")
+        raise typer.Exit()
+
 app = typer.Typer()
+
+@app.callback(invoke_without_command=True)
+def main(
+    ctx: typer.Context,
+    version: bool = typer.Option(False, "--version", "-v", help="Show version and exit", callback=version_callback, is_eager=True)
+):
+    """Perplexity CLI - A command-line interface for Perplexity AI with RAG capabilities."""
+    if ctx.invoked_subcommand is None and not version:
+        typer.echo("Welcome to Perplexity CLI! Use --help to see available commands.")
+        raise typer.Exit()
 
 def get_model_from_name(name: str) -> Optional[PerplexityModel]:
     model_mapping = {
@@ -137,6 +154,12 @@ def list_models():
     """List all available Perplexity AI models."""
     for model in PerplexityModel:
         typer.echo(f"{model.name.lower()}: {model.value}")
+
+@app.command()
+def version():
+    """Show the version of Perplexity CLI."""
+    version_str = get_version()
+    typer.echo(f"Perplexity CLI version {version_str}")
 
 @app.command()
 def note(
