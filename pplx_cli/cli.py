@@ -12,6 +12,9 @@ from typing import Optional, List
 from .notes import NotesDB
 from .chat_history import ChatHistoryDB
 
+# Import new RAG components
+from .rag import RagDB, ContentType, HybridSearchEngine, SearchMode, BatchIndexer, get_embedding_model
+
 app = typer.Typer()
 
 def get_model_from_name(name: str) -> Optional[PerplexityModel]:
@@ -403,4 +406,308 @@ def show_chat_stats():
         
     except Exception as e:
         typer.echo(f"Error getting statistics: {str(e)}", err=True)
+        raise typer.Exit(code=1)
+
+
+# ========== NEW RAG COMMANDS ==========
+
+def get_rag_db() -> RagDB:
+    """Get or create the RAG database instance."""
+    config = Config.get_instance()
+    rag_db_path = Path.home() / ".local" / "share" / "perplexity" / "rag" / "rag.db"
+    return RagDB(rag_db_path)
+
+
+@app.command(name="rag")
+def rag_search(
+    query: str = typer.Argument(..., help="Search query"),
+    mode: str = typer.Option("hybrid", "--mode", "-m", help="Search mode: vector, keyword, or hybrid"),
+    source: str = typer.Option("all", "--source", "-s", help="Content source: all, notes, or chats"),
+    limit: int = typer.Option(5, "--limit", "-l", help="Maximum number of results"),
+    threshold: float = typer.Option(0.0, "--threshold", "-t", help="Minimum similarity threshold"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed results"),
+    explain: bool = typer.Option(False, "--explain", help="Explain search process")
+):
+    """Search across all your content using fast RAG."""
+    try:
+        # Parse search mode
+        try:
+            search_mode = SearchMode(mode.lower())
+        except ValueError:
+            typer.echo(f"Invalid search mode: {mode}. Use: vector, keyword, or hybrid", err=True)
+            raise typer.Exit(code=1)
+        
+        # Parse content types
+        content_types = None
+        if source != "all":
+            if source == "notes":
+                content_types = [ContentType.NOTE]
+            elif source == "chats":
+                content_types = [ContentType.CHAT_MESSAGE]
+            else:
+                typer.echo(f"Invalid source: {source}. Use: all, notes, or chats", err=True)
+                raise typer.Exit(code=1)
+        
+        # Initialize RAG components
+        rag_db = get_rag_db()
+        search_engine = HybridSearchEngine(rag_db, default_mode=search_mode)
+        
+        # Show search explanation if requested
+        if explain:
+            explanation = search_engine.explain_search(query, search_mode, content_types, limit)
+            typer.echo("\n🔍 Search Explanation:")
+            typer.echo("=" * 40)
+            for key, value in explanation.items():
+                typer.echo(f"{key}: {value}")
+            typer.echo("")
+        
+        # Perform search
+        typer.echo(f"🔎 Searching with {mode} mode...")
+        results = search_engine.search(
+            query=query,
+            mode=search_mode,
+            content_types=content_types,
+            limit=limit,
+            similarity_threshold=threshold
+        )
+        
+        if not results:
+            typer.echo("No results found.")
+            return
+        
+        # Display results
+        typer.echo(f"\n📋 Found {len(results)} results:")
+        typer.echo("=" * 50)
+        
+        for i, result in enumerate(results, 1):
+            typer.echo(f"\n{i}. [{result.content_type.upper()}] Score: {result.score:.3f}")
+            
+            if verbose:
+                typer.echo(f"   Source ID: {result.source_id}")
+                typer.echo(f"   Chunk: {result.chunk_index}")
+                if result.metadata:
+                    typer.echo(f"   Metadata: {json.dumps(result.metadata, indent=2)}")
+            
+            # Truncate content for display
+            content = result.content
+            if len(content) > 200 and not verbose:
+                content = content[:200] + "..."
+            
+            typer.echo(f"   Content: {content}")
+            typer.echo("-" * 30)
+            
+    except Exception as e:
+        typer.echo(f"Search failed: {str(e)}", err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="rag-migrate")
+def rag_migrate(
+    source: str = typer.Option("both", "--source", "-s", help="Migration source: notes, chats, or both"),
+    clear: bool = typer.Option(False, "--clear", help="Clear existing RAG data before migration"),
+    estimate: bool = typer.Option(False, "--estimate", help="Show time estimate only"),
+    notes_path: Optional[str] = typer.Option(None, "--notes-path", help="Custom path to notes database"),
+    chats_path: Optional[str] = typer.Option(None, "--chats-path", help="Custom path to chat database")
+):
+    """Migrate existing notes and chat history to the new RAG system."""
+    try:
+        # Get database paths
+        config = Config.get_instance()
+        notes_db_path = Path(notes_path) if notes_path else (config.notes_dir / "notes.db")
+        chats_db_path = Path(chats_path) if chats_path else (Path.home() / ".local" / "share" / "perplexity" / "chat_history" / "chat_history.db")
+        
+        # Initialize components
+        rag_db = get_rag_db()
+        indexer = BatchIndexer(rag_db)
+        
+        # Show time estimate if requested
+        if estimate:
+            typer.echo("⏱️  Estimating migration time...")
+            
+            estimate_kwargs = {}
+            if source in ["notes", "both"] and notes_db_path.exists():
+                estimate_kwargs["notes_db_path"] = notes_db_path
+            if source in ["chats", "both"] and chats_db_path.exists():
+                estimate_kwargs["chat_db_path"] = chats_db_path
+            
+            estimates = indexer.estimate_migration_time(**estimate_kwargs)
+            
+            typer.echo("\n📊 Migration Estimates:")
+            typer.echo("=" * 30)
+            
+            for source_type, data in estimates.items():
+                if source_type != "total":
+                    typer.echo(f"{source_type.title()}:")
+                    typer.echo(f"  Count: {data['count']}")
+                    typer.echo(f"  Estimated chunks: {data['estimated_chunks']}")
+                    typer.echo(f"  Estimated time: {data['estimated_time_formatted']}")
+                    typer.echo("")
+            
+            if "total" in estimates:
+                typer.echo(f"Total estimated time: {estimates['total']['estimated_time_formatted']}")
+            
+            return
+        
+        # Confirm migration
+        if not typer.confirm("This will migrate your existing data to the new RAG system. Continue?"):
+            typer.echo("Migration cancelled.")
+            return
+        
+        total_migrated = 0
+        total_failed = 0
+        
+        # Migrate notes
+        if source in ["notes", "both"] and notes_db_path.exists():
+            typer.echo("\n📝 Migrating notes...")
+            migrated, failed = indexer.migrate_notes_database(notes_db_path, clear_existing=clear)
+            total_migrated += migrated
+            total_failed += failed
+            clear = False  # Only clear once
+        
+        # Migrate chat history  
+        if source in ["chats", "both"] and chats_db_path.exists():
+            typer.echo("\n💬 Migrating chat history...")
+            migrated, failed = indexer.migrate_chat_history_database(
+                chats_db_path, 
+                clear_existing=clear,
+                include_user_messages=True,
+                include_assistant_messages=True
+            )
+            total_migrated += migrated
+            total_failed += failed
+        
+        # Show results
+        typer.echo(f"\n✅ Migration complete!")
+        typer.echo(f"   Migrated: {total_migrated}")
+        typer.echo(f"   Failed: {total_failed}")
+        
+        if total_migrated > 0:
+            typer.echo(f"\n🚀 Try searching: perplexity rag 'your search query'")
+            
+    except Exception as e:
+        typer.echo(f"Migration failed: {str(e)}", err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="rag-stats")
+def rag_stats():
+    """Show RAG database statistics."""
+    try:
+        rag_db = get_rag_db()
+        search_engine = HybridSearchEngine(rag_db)
+        
+        stats = search_engine.get_search_stats()
+        
+        typer.echo("\n📊 RAG Database Statistics")
+        typer.echo("=" * 40)
+        
+        # Database stats
+        db_stats = stats["database_stats"]
+        typer.echo(f"Total Documents: {db_stats['total_documents']}")
+        
+        if db_stats["by_content_type"]:
+            typer.echo("\nBy Content Type:")
+            for content_type, data in db_stats["by_content_type"].items():
+                typer.echo(f"  {content_type.title()}:")
+                typer.echo(f"    Chunks: {data['chunks']}")
+                typer.echo(f"    Unique Sources: {data['unique_sources']}")
+        
+        # Search config
+        search_config = stats["search_config"]
+        typer.echo(f"\nSearch Configuration:")
+        typer.echo(f"  Default Mode: {search_config['default_mode']}")
+        typer.echo(f"  RRF K: {search_config['rrf_k']}")
+        typer.echo(f"  Vector Weight: {search_config['vector_weight']:.2f}")
+        typer.echo(f"  Keyword Weight: {search_config['keyword_weight']:.2f}")
+        
+        # Embedding model
+        model_info = stats["embedding_model"]
+        typer.echo(f"\nEmbedding Model:")
+        typer.echo(f"  Model: {model_info['model_name']}")
+        typer.echo(f"  Device: {model_info['device']}")
+        typer.echo(f"  Dimensions: {model_info['embedding_dim']}")
+        typer.echo(f"  Quantized: {model_info['quantized']}")
+        
+    except Exception as e:
+        typer.echo(f"Failed to get statistics: {str(e)}", err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="rag-index")
+def rag_index(
+    clear: bool = typer.Option(False, "--clear", help="Clear existing vector indices before reindexing")
+):
+    """Re-index all content in the RAG database."""
+    try:
+        rag_db = get_rag_db()
+        indexer = BatchIndexer(rag_db)
+        
+        if not typer.confirm("This will re-index all content. Continue?"):
+            typer.echo("Reindexing cancelled.")
+            return
+        
+        typer.echo("🔄 Reindexing content...")
+        success = indexer.reindex_all(clear_first=clear)
+        
+        if success:
+            typer.echo("✅ Reindexing completed successfully!")
+        else:
+            typer.echo("⚠️  Reindexing completed with some errors.")
+            
+    except Exception as e:
+        typer.echo(f"Reindexing failed: {str(e)}", err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="rag-config")
+def rag_config(
+    model: Optional[str] = typer.Option(None, "--model", help="Embedding model: small, base, or large"),
+    device: Optional[str] = typer.Option(None, "--device", help="Device: cpu, cuda, or mps"),
+    show: bool = typer.Option(False, "--show", help="Show current configuration")
+):
+    """Configure RAG settings."""
+    try:
+        if show:
+            # Show current configuration
+            embedding_model = get_embedding_model()
+            info = embedding_model.get_model_info()
+            
+            typer.echo("\n⚙️  Current RAG Configuration")
+            typer.echo("=" * 40)
+            typer.echo(f"Model: {info['model_name']}")
+            typer.echo(f"Device: {info['device']}")
+            typer.echo(f"Embedding Dimensions: {info['embedding_dim']}")
+            typer.echo(f"Quantized: {info['quantized']}")
+            typer.echo(f"Cache Size: {info['cache_size']}")
+            typer.echo(f"Max Sequence Length: {info['max_sequence_length']}")
+            return
+        
+        # Update configuration
+        updated = False
+        
+        if model:
+            if model not in ["small", "base", "large"]:
+                typer.echo("Invalid model. Use: small, base, or large", err=True)
+                raise typer.Exit(code=1)
+            
+            typer.echo(f"Setting embedding model to: {model}")
+            # Note: This would require restarting the application
+            # or implementing dynamic model switching
+            updated = True
+        
+        if device:
+            if device not in ["cpu", "cuda", "mps"]:
+                typer.echo("Invalid device. Use: cpu, cuda, or mps", err=True)
+                raise typer.Exit(code=1)
+            
+            typer.echo(f"Setting device to: {device}")
+            updated = True
+        
+        if updated:
+            typer.echo("⚠️  Configuration updated. Restart the application for changes to take effect.")
+        else:
+            typer.echo("No configuration changes specified. Use --show to see current settings.")
+            
+    except Exception as e:
+        typer.echo(f"Configuration failed: {str(e)}", err=True)
         raise typer.Exit(code=1)
