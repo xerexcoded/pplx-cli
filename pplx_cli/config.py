@@ -36,9 +36,9 @@ def save_api_key(api_key: str) -> None:
     CONFIG_FILE.chmod(0o600)
 
 class PerplexityModel(str, Enum):
-    SMALL = "llama-3.1-sonar-small-128k-online"
-    LARGE = "llama-3.1-sonar-large-128k-online"
-    HUGE = "llama-3.1-sonar-huge-128k-online"
+    SONAR = "sonar"
+    SONAR_REASONING = "sonar-reasoning"
+    SONAR_DEEP_RESEARCH = "sonar-deep-research"
 
     @classmethod
     def get_friendly_name(cls, model: 'PerplexityModel') -> str:
@@ -47,7 +47,7 @@ class PerplexityModel(str, Enum):
 class Config:
     API_ENDPOINT = "https://api.perplexity.ai/chat/completions"
     TIMEOUT = 30  # seconds
-    DEFAULT_MODEL = PerplexityModel.LARGE
+    DEFAULT_MODEL = PerplexityModel.SONAR
 
     def __init__(self):
         self.api_key = load_api_key()
@@ -79,8 +79,8 @@ class Config:
     @classmethod
     def get_model_info(cls, model: PerplexityModel) -> dict:
         model_info = {
-            PerplexityModel.SMALL: {"parameters": "8B", "context_length": 127072},
-            PerplexityModel.LARGE: {"parameters": "70B", "context_length": 127072},
-            PerplexityModel.HUGE: {"parameters": "175B", "context_length": 127072}
+            PerplexityModel.SONAR: {"type": "lightweight", "description": "Cost-effective search model with grounding"},
+            PerplexityModel.SONAR_REASONING: {"type": "reasoning", "description": "Fast, real-time reasoning model for quick problem-solving with search"},
+            PerplexityModel.SONAR_DEEP_RESEARCH: {"type": "research", "description": "Expert-level research model conducting exhaustive searches and comprehensive reports"}
         }
         return model_info.get(model, {})
