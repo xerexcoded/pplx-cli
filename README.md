@@ -78,7 +78,7 @@ perplexity rag "specific function name" --mode keyword
 # Search only your notes
 perplexity rag "project ideas" --source notes
 
-# Search only chat history  
+# Search only chat history
 perplexity rag "debugging help" --source chats
 
 # Get detailed results with metadata
@@ -156,11 +156,11 @@ perplexity rag "client feedback" --limit 15
 
 ### 🔬 Technical Excellence
 
-The RAG system uses cutting-edge 2024 technology:
+The RAG system uses cutting-edge 2025 technology:
 
 - **BGE Embeddings**: State-of-the-art BAAI General Embedding models
   - `small`: 33M params, 62.17 MTEB score
-  - `base`: 109M params, 63.55 MTEB score (default)  
+  - `base`: 109M params, 63.55 MTEB score (default)
   - `large`: 335M params, 64.23 MTEB score
 - **sqlite-vec**: High-performance vector search directly in SQLite
 - **Hybrid Search**: Reciprocal Rank Fusion combines multiple ranking signals
@@ -200,7 +200,7 @@ perplexity ask "Explain quantum computing" --topic physics
 
 **Available Models:**
 - `small`: Lightweight, fast responses (maps to sonar)
-- `large`: Deep reasoning and analysis (maps to sonar-reasoning)  
+- `large`: Deep reasoning and analysis (maps to sonar-reasoning)
 - `huge`: Comprehensive research reports (maps to sonar-deep-research)
 
 ### Chat History Management
@@ -281,7 +281,7 @@ perplexity ask-notes "What did I write about machine learning?"
 
 ### Speed Benchmarks
 - **Search 10,000 documents**: < 100ms
-- **Index 1,000 documents**: < 5 seconds  
+- **Index 1,000 documents**: < 5 seconds
 - **Memory usage**: < 512MB for typical workloads
 - **Embedding generation**: 200+ texts/second
 
@@ -293,7 +293,7 @@ perplexity ask-notes "What did I write about machine learning?"
 
 ### Advanced Features
 - **Multi-modal search**: Combine vector similarity + keyword matching
-- **Content-aware chunking**: Intelligent text segmentation  
+- **Content-aware chunking**: Intelligent text segmentation
 - **Relevance tuning**: Configurable similarity thresholds
 - **Batch processing**: Efficient bulk operations
 - **Progress tracking**: Real-time migration status
@@ -301,7 +301,7 @@ perplexity ask-notes "What did I write about machine learning?"
 ## 🎯 Getting Started Checklist
 
 **New Users:**
-1. ✅ Install: `pip install pplx-cli` 
+1. ✅ Install: `pip install pplx-cli`
 2. ✅ Setup: `perplexity setup`
 3. ✅ Try it: `perplexity ask "Hello world"`
 4. 🚀 **Migrate to RAG**: `perplexity rag-migrate`
@@ -309,7 +309,7 @@ perplexity ask-notes "What did I write about machine learning?"
 
 **Existing Users:**
 1. 🚀 **Essential**: `perplexity rag-migrate` (unlock fast search!)
-2. 📊 Check stats: `perplexity rag-stats`  
+2. 📊 Check stats: `perplexity rag-stats`
 3. 🔍 Try search: `perplexity rag "something you remember discussing"`
 4. 🎉 Enjoy 10x faster, better search results!
 
@@ -325,7 +325,7 @@ poetry install
 poetry run pytest  # Run tests
 poetry run perplexity --help  # Test CLI
 
-# Or using pip  
+# Or using pip
 pip install -e .
 ```
 
@@ -344,7 +344,7 @@ poetry run pytest -v
 ### Architecture
 The project uses modern Python practices:
 - **Poetry**: Dependency management
-- **Typer**: CLI framework  
+- **Typer**: CLI framework
 - **SQLite + sqlite-vec**: Vector database
 - **BGE Embeddings**: State-of-the-art semantic search
 - **Hybrid Search**: Best of vector + keyword search
@@ -361,7 +361,7 @@ The project uses modern Python practices:
 
 **Perfect for:**
 - 👨‍💻 **Developers**: Search code discussions, debug sessions, learning notes
-- 🔬 **Researchers**: Find methodology notes, literature reviews, experiment logs  
+- 🔬 **Researchers**: Find methodology notes, literature reviews, experiment logs
 - 💼 **Knowledge workers**: Locate project info, meeting notes, decisions
 - 📚 **Students**: Search study materials, lecture notes, research papers
 - 🧠 **Anyone**: Who wants their accumulated knowledge to be instantly searchable
@@ -384,7 +384,7 @@ perplexity rag "anything you want to find"
 
 We welcome contributions! The RAG system opens up many possibilities for enhancements:
 - New embedding models
-- Advanced search algorithms  
+- Advanced search algorithms
 - Export integrations
 - Performance optimizations
 
