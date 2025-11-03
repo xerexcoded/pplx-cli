@@ -1,7 +1,7 @@
 import pytest
 from typer.testing import CliRunner
 from pplx_cli.cli import app
-from pplx_cli.config import PerplexityModel, save_api_key, Config, load_api_key
+from pplx_cli.config import PerplexityModel, save_api_key, Config, load_api_key, get_version
 import os
 from pathlib import Path
 
@@ -88,4 +88,5 @@ def test_version_flag(runner):
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
     assert "Perplexity CLI version" in result.stdout
-    assert "0.2.3" in result.stdout
+    version_str = get_version()
+    assert version_str in result.stdout
