@@ -1,7 +1,7 @@
 import pytest
 from typer.testing import CliRunner
 from pplx_cli.cli import app
-from pplx_cli.config import PerplexityModel, save_api_key, Config, load_api_key
+from pplx_cli.config import PerplexityModel, save_api_key, Config, load_api_key, get_version
 import os
 from pathlib import Path
 
@@ -74,3 +74,19 @@ def test_model_selection(runner, mock_config, requests_mock):
     result = runner.invoke(app, ["ask", "--model", "small", "test"])
     assert result.exit_code == 0
     assert "Test response" in result.stdout
+
+def test_help_command(runner):
+    """Test that --help flag works correctly."""
+    result = runner.invoke(app, ["--help"])
+    assert result.exit_code == 0
+    assert "Perplexity CLI" in result.stdout
+    assert "Commands" in result.stdout or "commands" in result.stdout.lower()
+    assert "ask" in result.stdout
+
+def test_version_flag(runner):
+    """Test that --version flag works correctly."""
+    result = runner.invoke(app, ["--version"])
+    assert result.exit_code == 0
+    assert "Perplexity CLI version" in result.stdout
+    version_str = get_version()
+    assert version_str in result.stdout
