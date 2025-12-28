@@ -6,6 +6,12 @@ from pathlib import Path
 from dotenv import load_dotenv
 import toml
 
+try:
+    from importlib.metadata import version as get_package_version
+except ImportError:
+    # Python < 3.8
+    from importlib_metadata import version as get_package_version
+
 load_dotenv()
 
 CONFIG_DIR = Path.home() / ".config" / "perplexity"
@@ -37,19 +43,23 @@ def save_api_key(api_key: str) -> None:
     CONFIG_FILE.chmod(0o600)
 
 def get_version() -> str:
-    """Get the version from pyproject.toml."""
+    """Get the version from package metadata or pyproject.toml."""
     try:
-        # Get the project root directory (where pyproject.toml is located)
-        project_root = Path(__file__).parent.parent
-        pyproject_path = project_root / "pyproject.toml"
-        
-        if pyproject_path.exists():
-            with open(pyproject_path, 'r') as f:
-                pyproject_data = toml.load(f)
-                return pyproject_data.get("tool", {}).get("poetry", {}).get("version", "unknown")
-        else:
-            return "unknown"
+        # First try to get version from installed package metadata
+        return get_package_version("pplx-cli")
     except Exception:
+        # Fallback: try to read from pyproject.toml (for development/editable installs)
+        try:
+            project_root = Path(__file__).parent.parent
+            pyproject_path = project_root / "pyproject.toml"
+            
+            if pyproject_path.exists():
+                with open(pyproject_path, 'r') as f:
+                    pyproject_data = toml.load(f)
+                    return pyproject_data.get("tool", {}).get("poetry", {}).get("version", "unknown")
+        except Exception:
+            pass
+        
         return "unknown"
 
 class PerplexityModel(str, Enum):
