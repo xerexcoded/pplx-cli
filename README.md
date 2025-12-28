@@ -12,6 +12,7 @@ A powerful command-line interface for Perplexity AI with **ultra-fast RAG (Retri
 - 📝 **Advanced Note Management**: Local storage with AI-powered semantic search
 - 💬 **Complete Chat History**: Track, analyze, and export all conversations
 - 📊 **Rich Analytics**: Detailed statistics and insights about your usage
+- 🖥️ **Cross-Platform**: Works on macOS, Linux, WSL2, and Windows
 
 ## Installation
 
@@ -223,19 +224,19 @@ perplexity show-chat <conversation-id>
 Export a conversation:
 ```bash
 # Export to markdown
-perplexity export-chat <conversation-id> --format markdown -o conversation.md
+perplexity export-chat <conversation-id> --format markdown --output conversation.md
 
 # Export to JSON
-perplexity export-chat <conversation-id> --format json -o conversation.json
+perplexity export-chat <conversation-id> --format json --output conversation.json
 ```
 
 Export all conversations:
 ```bash
 # Export to Excel
-perplexity export-all --format excel -o chat_history.xlsx
+perplexity export-all --format excel --output chat_history.xlsx
 
 # Export to JSON
-perplexity export-all --format json -o chat_history.json
+perplexity export-all --format json --output chat_history.json
 ```
 
 ### Legacy Note Management
@@ -273,9 +274,24 @@ perplexity ask-notes "What did I write about machine learning?"
 |---------|---------|---------|
 | `ask` | Chat with AI | `perplexity ask "question"` |
 | `history` | View chat history | `perplexity history` |
-| `export-chat` | Export conversation | `perplexity export-chat 123` |
-| `note` | Create note | `perplexity note --title "My Note"` |
+| `export-chat` | Export conversation | `perplexity export-chat 123 --output file.md` |
+| `note` | Create note | `perplexity note --title "My Note" --content "..."` |
 | `list-notes` | List notes | `perplexity list-notes` |
+
+### CLI Options
+
+Most commands support long-form options. Boolean flags (like `--verbose`) also support short forms (e.g., `-v`):
+
+```bash
+# Boolean flags support short forms
+perplexity ask "question" --verbose    # or -v
+perplexity rag "query" --verbose       # or -v
+
+# Non-boolean options use long form
+perplexity ask "question" --model large --topic physics
+perplexity rag "query" --mode vector --source notes --limit 10
+perplexity export-chat 123 --format json --output file.json
+```
 
 ## 🚀 Performance & Capabilities
 

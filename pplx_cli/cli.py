@@ -2,8 +2,7 @@ import typer
 from typing import Optional
 import getpass
 import sys
-import tty
-import termios
+import platform
 import json
 from .api import query_perplexity
 from .config import PerplexityModel, Config, save_api_key, load_api_key, get_version
@@ -11,6 +10,12 @@ from pathlib import Path
 from typing import Optional, List
 from .notes import NotesDB
 from .chat_history import ChatHistoryDB
+
+# Import Unix-only modules conditionally for cross-platform compatibility
+IS_WINDOWS = platform.system() == "Windows"
+if not IS_WINDOWS:
+    import tty
+    import termios
 
 # Import new RAG components
 from .rag import RagDB, ContentType, HybridSearchEngine, SearchMode, BatchIndexer, get_embedding_model
@@ -47,7 +52,17 @@ def get_model_from_name(name: str) -> Optional[PerplexityModel]:
     return model
 
 def get_masked_input(prompt: str = "Enter password: ") -> str:
-    """Get password input with asterisk masking."""
+    """Get password input with asterisk masking.
+    
+    Uses platform-specific implementation:
+    - On Unix/macOS: Custom asterisk masking with tty/termios
+    - On Windows: Falls back to getpass (no echo, but no asterisks)
+    """
+    # On Windows, use getpass which handles input masking natively
+    if IS_WINDOWS:
+        return getpass.getpass(prompt)
+    
+    # Unix/macOS: Custom asterisk masking
     password = []
     sys.stdout.write(prompt)
     sys.stdout.flush()
@@ -114,11 +129,10 @@ def ensure_api_key():
 @app.command()
 def ask(
     query: str = typer.Argument(..., help="The question to ask Perplexity AI"),
-    topic: str = typer.Option(None, "--topic", "-t", help="Topic for the conversation"),
+    topic: str = typer.Option(None, "--topic", help="Topic for the conversation"),
     model: str = typer.Option(
         None,
         "--model",
-        "-m",
         help="Model to use for the query (small, large, huge)",
         case_sensitive=False
     ),
@@ -163,11 +177,11 @@ def version():
 
 @app.command()
 def note(
-    title: str = typer.Option(..., "--title", "-t", help="Title of the note"),
-    content: str = typer.Option(..., "--content", "-c", help="Content of the note"),
+    title: str = typer.Option(..., "--title", help="Title of the note"),
+    content: str = typer.Option(..., "--content", help="Content of the note"),
     tags: Optional[List[str]] = typer.Option(None, "--tag", help="Tags for the note"),
     directory: Optional[Path] = typer.Option(
-        None, "--dir", "-d", 
+        None, "--dir", 
         help="Directory to store notes (default: ~/.local/share/perplexity/notes)"
     )
 ):
@@ -181,9 +195,9 @@ def note(
 
 @app.command()
 def list_notes(
-    tag: Optional[str] = typer.Option(None, "--tag", "-t", help="Filter notes by tag"),
+    tag: Optional[str] = typer.Option(None, "--tag", help="Filter notes by tag"),
     directory: Optional[Path] = typer.Option(
-        None, "--dir", "-d",
+        None, "--dir",
         help="Directory to read notes from (default: ~/.local/share/perplexity/notes)"
     )
 ):
@@ -209,7 +223,7 @@ def list_notes(
 def view_note(
     note_id: int = typer.Argument(..., help="ID of the note to view"),
     directory: Optional[Path] = typer.Option(
-        None, "--dir", "-d",
+        None, "--dir",
         help="Directory to read notes from (default: ~/.local/share/perplexity/notes)"
     )
 ):
@@ -238,9 +252,9 @@ def view_note(
 @app.command()
 def ask_notes(
     query: str = typer.Argument(..., help="The question to ask about your notes"),
-    top_k: int = typer.Option(3, "--top", "-k", help="Number of most relevant notes to consider"),
+    top_k: int = typer.Option(3, "--top", help="Number of most relevant notes to consider"),
     directory: Optional[Path] = typer.Option(
-        None, "--dir", "-d",
+        None, "--dir",
         help="Directory to read notes from (default: ~/.local/share/perplexity/notes)"
     )
 ):
@@ -287,8 +301,8 @@ Please provide a comprehensive answer based solely on the information in these n
 
 @app.command(name="history")
 def list_history(
-    topic: Optional[str] = typer.Option(None, "--topic", "-t", help="Filter conversations by topic"),
-    search: Optional[str] = typer.Option(None, "--search", "-s", help="Search conversations by content")
+    topic: Optional[str] = typer.Option(None, "--topic", help="Filter conversations by topic"),
+    search: Optional[str] = typer.Option(None, "--search", help="Search conversations by content")
 ):
     """List chat history."""
     db = ChatHistoryDB()
@@ -338,8 +352,8 @@ def show_conversation(
 @app.command(name="export-chat")
 def export_conversation(
     conversation_id: int = typer.Argument(..., help="ID of the conversation to export"),
-    format: str = typer.Option("markdown", "--format", "-f", help="Export format (markdown, json, txt, csv, excel)"),
-    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output file path")
+    format: str = typer.Option("markdown", "--format", help="Export format (markdown, json, txt, csv, excel)"),
+    output: Optional[Path] = typer.Option(None, "--output", help="Output file path")
 ):
     """Export a conversation to a file."""
     db = ChatHistoryDB()
@@ -367,8 +381,8 @@ def export_conversation(
 
 @app.command(name="export-all")
 def export_all_conversations(
-    format: str = typer.Option("excel", "--format", "-f", help="Export format (excel, csv)"),
-    output: Path = typer.Option(..., "--output", "-o", help="Output file path")
+    format: str = typer.Option("excel", "--format", help="Export format (excel, csv)"),
+    output: Path = typer.Option(..., "--output", help="Output file path")
 ):
     """Export all conversations to a file."""
     db = ChatHistoryDB()
@@ -444,10 +458,10 @@ def get_rag_db() -> RagDB:
 @app.command(name="rag")
 def rag_search(
     query: str = typer.Argument(..., help="Search query"),
-    mode: str = typer.Option("hybrid", "--mode", "-m", help="Search mode: vector, keyword, or hybrid"),
-    source: str = typer.Option("all", "--source", "-s", help="Content source: all, notes, or chats"),
-    limit: int = typer.Option(5, "--limit", "-l", help="Maximum number of results"),
-    threshold: float = typer.Option(0.0, "--threshold", "-t", help="Minimum similarity threshold"),
+    mode: str = typer.Option("hybrid", "--mode", help="Search mode: vector, keyword, or hybrid"),
+    source: str = typer.Option("all", "--source", help="Content source: all, notes, or chats"),
+    limit: int = typer.Option(5, "--limit", help="Maximum number of results"),
+    threshold: float = typer.Option(0.0, "--threshold", help="Minimum similarity threshold"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed results"),
     explain: bool = typer.Option(False, "--explain", help="Explain search process")
 ):
@@ -526,7 +540,7 @@ def rag_search(
 
 @app.command(name="rag-migrate")
 def rag_migrate(
-    source: str = typer.Option("both", "--source", "-s", help="Migration source: notes, chats, or both"),
+    source: str = typer.Option("both", "--source", help="Migration source: notes, chats, or both"),
     clear: bool = typer.Option(False, "--clear", help="Clear existing RAG data before migration"),
     estimate: bool = typer.Option(False, "--estimate", help="Show time estimate only"),
     notes_path: Optional[str] = typer.Option(None, "--notes-path", help="Custom path to notes database"),
