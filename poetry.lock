@@ -128,24 +128,6 @@ files = [
 colorama = {version = "*", markers = "platform_system == \"Windows\""}
 
 [[package]]
-name = "click-default-group"
-version = "1.2.4"
-description = "click_default_group"
-optional = false
-python-versions = ">=2.7"
-groups = ["main"]
-files = [
-    {file = "click_default_group-1.2.4-py2.py3-none-any.whl", hash = "sha256:9b60486923720e7fc61731bdb32b617039aba820e22e1c88766b1125592eaa5f"},
-    {file = "click_default_group-1.2.4.tar.gz", hash = "sha256:eb3f3c99ec0d456ca6cd2a7f08f7d4e91771bef51b01bdd9580cc6450fe1251e"},
-]
-
-[package.dependencies]
-click = "*"
-
-[package.extras]
-test = ["pytest"]
-
-[[package]]
 name = "colorama"
 version = "0.4.6"
 description = "Cross-platform colored terminal text."
@@ -938,7 +920,7 @@ version = "1.5.0"
 description = "plugin and hook calling mechanisms for python"
 optional = false
 python-versions = ">=3.8"
-groups = ["main", "test"]
+groups = ["test"]
 files = [
     {file = "pluggy-1.5.0-py3-none-any.whl", hash = "sha256:44e1ad92c8ca002de6377e165f3e0f1be63266ab4d554740532335b9d75ea669"},
     {file = "pluggy-1.5.0.tar.gz", hash = "sha256:2cffa88e94fdc978c4c574f15f9e59b7f4201d439195c3715ca9e2486f1d0cf1"},
@@ -1561,48 +1543,6 @@ files = [
 ]
 
 [[package]]
-name = "sqlite-fts4"
-version = "1.0.3"
-description = "Python functions for working with SQLite FTS4 search"
-optional = false
-python-versions = "*"
-groups = ["main"]
-files = [
-    {file = "sqlite-fts4-1.0.3.tar.gz", hash = "sha256:78b05eeaf6680e9dbed8986bde011e9c086a06cb0c931b3cf7da94c214e8930c"},
-    {file = "sqlite_fts4-1.0.3-py3-none-any.whl", hash = "sha256:0359edd8dea6fd73c848989e1e2b1f31a50fe5f9d7272299ff0e8dbaa62d035f"},
-]
-
-[package.extras]
-test = ["pytest"]
-
-[[package]]
-name = "sqlite-utils"
-version = "3.37"
-description = "CLI tool and Python library for manipulating SQLite databases"
-optional = false
-python-versions = ">=3.8"
-groups = ["main"]
-files = [
-    {file = "sqlite_utils-3.37-py3-none-any.whl", hash = "sha256:4fb0dc9e61b1f9226a14eb1f072e984cf3cb69058dc2838887600a0771e9624f"},
-    {file = "sqlite_utils-3.37.tar.gz", hash = "sha256:542a71033d4e7936fe909230ac9794d3e200021838ab63dbaf3ce8f5bc2273a4"},
-]
-
-[package.dependencies]
-click = "*"
-click-default-group = ">=1.2.3"
-pluggy = "*"
-python-dateutil = "*"
-sqlite-fts4 = "*"
-tabulate = "*"
-
-[package.extras]
-docs = ["beanbag-docutils (>=2.0)", "codespell", "furo", "pygments-csv-lexer", "sphinx-autobuild", "sphinx-copybutton"]
-flake8 = ["flake8"]
-mypy = ["data-science-types", "mypy", "types-click", "types-pluggy", "types-python-dateutil", "types-tabulate"]
-test = ["black (>=24.1.1)", "cogapp", "hypothesis", "pytest"]
-tui = ["trogon"]
-
-[[package]]
 name = "sympy"
 version = "1.14.0"
 description = "Computer algebra system (CAS) in Python"
@@ -1619,21 +1559,6 @@ mpmath = ">=1.1.0,<1.4"
 
 [package.extras]
 dev = ["hypothesis (>=6.70.0)", "pytest (>=7.1.0)"]
-
-[[package]]
-name = "tabulate"
-version = "0.9.0"
-description = "Pretty-print tabular data"
-optional = false
-python-versions = ">=3.7"
-groups = ["main"]
-files = [
-    {file = "tabulate-0.9.0-py3-none-any.whl", hash = "sha256:024ca478df22e9340661486f85298cff5f6dcdba14f3813e8830015b9ed1948f"},
-    {file = "tabulate-0.9.0.tar.gz", hash = "sha256:0095b12bf5966de529c0feb1fa08671671b3368eec77d7ef7ab114be2c068b3c"},
-]
-
-[package.extras]
-widechars = ["wcwidth"]
 
 [[package]]
 name = "threadpoolctl"
@@ -2031,4 +1956,4 @@ zstd = ["zstandard (>=0.18.0)"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.12"
-content-hash = "2540b5bbf1f7e7942364bf896f28c5e156fe4782526e3d7722eab7f830667d4d"
+content-hash = "28fdccfc3c163c37937d23fecc4821d65480d41f541468c84b09dfbdc5bfbb95"
