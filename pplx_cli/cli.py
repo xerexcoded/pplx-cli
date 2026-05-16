@@ -20,6 +20,9 @@ if not IS_WINDOWS:
 # Import new RAG components
 from .rag import RagDB, ContentType, HybridSearchEngine, SearchMode, BatchIndexer, get_embedding_model
 
+# Import knowledge graph components
+from .knowledge_graph import generate_knowledge_graph_html, launch_knowledge_graph
+
 def version_callback(value: bool):
     """Callback for --version flag."""
     if value:
@@ -352,51 +355,52 @@ def show_conversation(
 @app.command(name="export-chat")
 def export_conversation(
     conversation_id: int = typer.Argument(..., help="ID of the conversation to export"),
-    format: str = typer.Option("markdown", "--format", help="Export format (markdown, json, txt, csv, excel)"),
+    fmt: str = typer.Option("markdown", "--format", help="Export format (markdown, json, txt, csv, excel)"),
     output: Optional[Path] = typer.Option(None, "--output", help="Output file path")
 ):
     """Export a conversation to a file."""
     db = ChatHistoryDB()
-    
+
     try:
-        content = db.export_conversation(conversation_id, format)
-        
+        content = db.export_conversation(conversation_id, fmt)
+
         if output:
             output.parent.mkdir(parents=True, exist_ok=True)
-            if format == "excel":
+            if fmt == "excel":
                 with open(output, "wb") as f:
                     f.write(content)
             else:
                 output.write_text(content)
             typer.echo(f"Conversation exported to {output}")
         else:
-            if format == "excel":
+            if fmt == "excel":
                 typer.echo("Excel format requires an output file path")
                 raise typer.Exit(code=1)
             typer.echo(content)
-            
+
     except Exception as e:
         typer.echo(f"Error exporting conversation: {str(e)}", err=True)
         raise typer.Exit(code=1)
 
+
 @app.command(name="export-all")
 def export_all_conversations(
-    format: str = typer.Option("excel", "--format", help="Export format (excel, csv)"),
+    fmt: str = typer.Option("excel", "--format", help="Export format (excel, csv)"),
     output: Path = typer.Option(..., "--output", help="Output file path")
 ):
     """Export all conversations to a file."""
     db = ChatHistoryDB()
-    
+
     try:
-        content = db.export_all_conversations(format)
-        
+        content = db.export_all_conversations(fmt)
+
         output.parent.mkdir(parents=True, exist_ok=True)
-        if format == "excel":
+        if fmt == "excel":
             with open(output, "wb") as f:
                 f.write(content)
         else:
             output.write_text(content)
-        
+
         typer.echo(f"All conversations exported to {output}")
     except Exception as e:
         typer.echo(f"Error exporting conversations: {str(e)}", err=True)
@@ -705,10 +709,9 @@ def rag_config(
     """Configure RAG settings."""
     try:
         if show:
-            # Show current configuration
             embedding_model = get_embedding_model()
             info = embedding_model.get_model_info()
-            
+
             typer.echo("\n⚙️  Current RAG Configuration")
             typer.echo("=" * 40)
             typer.echo(f"Model: {info['model_name']}")
@@ -718,33 +721,93 @@ def rag_config(
             typer.echo(f"Cache Size: {info['cache_size']}")
             typer.echo(f"Max Sequence Length: {info['max_sequence_length']}")
             return
-        
-        # Update configuration
+
         updated = False
-        
+
         if model:
             if model not in ["small", "base", "large"]:
                 typer.echo("Invalid model. Use: small, base, or large", err=True)
                 raise typer.Exit(code=1)
-            
-            typer.echo(f"Setting embedding model to: {model}")
-            # Note: This would require restarting the application
-            # or implementing dynamic model switching
+
+            import json
+            rag_config_path = Path.home() / ".config" / "perplexity" / "rag_config.json"
+            rag_config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_data = {}
+            if rag_config_path.exists():
+                with open(rag_config_path) as f:
+                    config_data = json.load(f)
+            config_data["model"] = model
+            with open(rag_config_path, "w") as f:
+                json.dump(config_data, f)
+            typer.echo(f"Embedding model set to: {model}")
             updated = True
-        
+
         if device:
             if device not in ["cpu", "cuda", "mps"]:
                 typer.echo("Invalid device. Use: cpu, cuda, or mps", err=True)
                 raise typer.Exit(code=1)
-            
-            typer.echo(f"Setting device to: {device}")
+
+            import json
+            rag_config_path = Path.home() / ".config" / "perplexity" / "rag_config.json"
+            rag_config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_data = {}
+            if rag_config_path.exists():
+                with open(rag_config_path) as f:
+                    config_data = json.load(f)
+            config_data["device"] = device
+            with open(rag_config_path, "w") as f:
+                json.dump(config_data, f)
+            typer.echo(f"Device set to: {device}")
             updated = True
-        
+
         if updated:
-            typer.echo("⚠️  Configuration updated. Restart the application for changes to take effect.")
+            from .rag.embeddings import reset_embedding_model
+            reset_embedding_model()
+            typer.echo("Configuration saved. Model will load with new settings on next use.")
         else:
             typer.echo("No configuration changes specified. Use --show to see current settings.")
             
     except Exception as e:
         typer.echo(f"Configuration failed: {str(e)}", err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="knowledge-graph")
+def knowledge_graph(
+    directory: Path = typer.Option(
+        ..., "--dir",
+        help="Directory containing markdown files to visualize",
+        exists=True, file_okay=False, dir_okay=True
+    ),
+    output: Optional[Path] = typer.Option(
+        None, "--output", "-o",
+        help="Save HTML to file instead of launching browser"
+    ),
+    title: Optional[str] = typer.Option(
+        None, "--title",
+        help="Title for the knowledge graph page"
+    ),
+):
+    """Visualize an Obsidian-style knowledge graph from markdown files."""
+    try:
+        typer.echo("Parsing markdown files and building knowledge graph...")
+        html_path = generate_knowledge_graph_html(
+            root_dir=directory,
+            output_path=output,
+            title=title,
+        )
+        typer.echo(f"Found {html_path.stat().st_size:,} bytes of graph data.")
+
+        if output:
+            typer.echo(f"\nKnowledge graph saved to: {html_path}")
+            typer.echo(f"Open it in your browser to view the interactive graph.")
+        else:
+            typer.echo("Starting knowledge graph server...")
+            launch_knowledge_graph(html_path=html_path)
+
+    except FileNotFoundError as e:
+        typer.echo(f"Error: {str(e)}", err=True)
+        raise typer.Exit(code=1)
+    except Exception as e:
+        typer.echo(f"Failed to generate knowledge graph: {str(e)}", err=True)
         raise typer.Exit(code=1)

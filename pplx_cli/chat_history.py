@@ -3,16 +3,9 @@ from pathlib import Path
 from typing import Optional, List, Dict, Union, Any
 from datetime import datetime
 import json
-from dataclasses import dataclass
 import pandas as pd
 import csv
 import io
-
-@dataclass
-class ChatMessage:
-    role: str
-    content: str
-    timestamp: str
 
 class ChatHistoryDB:
     DEFAULT_HISTORY_DIR = Path.home() / ".local" / "share" / "perplexity" / "chat_history"
@@ -120,24 +113,23 @@ class ChatHistoryDB:
             """, (f"%{query}%", f"%{query}%", f"%{query}%"))
             return [dict(row) for row in cursor.fetchall()]
     
-    def export_conversation(self, conversation_id: int, format: str = "markdown") -> Union[str, bytes]:
-        """Export a conversation in the specified format."""
+    def export_conversation(self, conversation_id: int, fmt: str = "markdown") -> Union[str, bytes]:
         conversation = self.get_conversation(conversation_id)
         if not conversation:
             raise ValueError(f"Conversation {conversation_id} not found")
-        
-        if format == "markdown":
+
+        if fmt == "markdown":
             return self._export_markdown(conversation)
-        elif format == "json":
+        elif fmt == "json":
             return json.dumps(conversation, indent=2)
-        elif format == "txt":
+        elif fmt == "txt":
             return self._export_text(conversation)
-        elif format == "csv":
+        elif fmt == "csv":
             return self._export_csv(conversation)
-        elif format == "excel":
+        elif fmt == "excel":
             return self._export_excel(conversation)
         else:
-            raise ValueError(f"Unsupported format: {format}")
+            raise ValueError(f"Unsupported format: {fmt}")
     
     def _export_markdown(self, conversation: Dict) -> str:
         """Export conversation as markdown."""
@@ -296,90 +288,56 @@ class ChatHistoryDB:
                 })
             return messages
 
-    def export_all_conversations(self, format: str = "excel") -> Union[str, bytes]:
-        """Export all conversations in the specified format."""
+    def export_all_conversations(self, fmt: str = "excel") -> Union[str, bytes]:
         df = self.to_dataframe()
-        
-        if format == "excel":
+
+        if fmt == "excel":
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                # Conversations sheet
                 conversations = df.groupby('conversation_id').first().reset_index()
                 conversations[['conversation_id', 'title', 'topic', 'created_at']].to_excel(
                     writer, sheet_name='Conversations', index=False
                 )
-                
-                # Messages sheet
                 df[['conversation_id', 'role', 'content', 'timestamp']].to_excel(
                     writer, sheet_name='Messages', index=False
                 )
-                
-                # Statistics sheet
                 stats = self.get_conversation_stats()
                 stats.to_excel(writer, sheet_name='Statistics', index=False)
-            
             return output.getvalue()
-        elif format == "csv":
+        elif fmt == "csv":
             output = io.StringIO()
             df.to_csv(output, index=False)
             return output.getvalue()
-        elif format == "json":
-            conversations = []
-            for _, row in df.iterrows():
-                conv = {
-                    'id': row['conversation_id'],
-                    'title': row['title'],
-                    'topic': row['topic'],
-                    'created_at': row['created_at'],
-                    'messages': []
-                }
-                
-                messages = self.get_messages(row['conversation_id'])
-                for msg in messages:
-                    conv['messages'].append({
-                        'role': msg['role'],
-                        'content': msg['content'],
-                        'timestamp': msg['timestamp']
-                    })
-                    
-                conversations.append(conv)
-                
-            return json.dumps({'conversations': conversations}, indent=2)
+        elif fmt == "json":
+            return self._export_all_json()
         else:
-            raise ValueError(f"Unsupported format for bulk export: {format}")
+            raise ValueError(f"Unsupported format for bulk export: {fmt}")
 
-    def export_all(self, output_path: str, format: str = "excel") -> None:
-        """Export all conversations to a file."""
+    def _export_all_json(self) -> str:
         df = self.to_dataframe()
-        
-        if df.empty:
-            return
-            
-        if format.lower() == "excel":
-            df.to_excel(output_path, index=False, engine='openpyxl')
-        elif format.lower() == "json":
-            # Get all conversations with their messages
-            conversations = []
-            for _, row in df.iterrows():
+        seen = set()
+        conversations = []
+        for _, row in df.iterrows():
+            conv_id = row['conversation_id']
+            if conv_id not in seen:
+                seen.add(conv_id)
                 conv = {
-                    'id': row['conversation_id'],
+                    'id': conv_id,
                     'title': row['title'],
                     'topic': row['topic'],
                     'created_at': row['created_at'],
-                    'messages': []
+                    'messages': self.get_messages(conv_id)
                 }
-                
-                messages = self.get_messages(row['conversation_id'])
-                for msg in messages:
-                    conv['messages'].append({
-                        'role': msg['role'],
-                        'content': msg['content'],
-                        'timestamp': msg['timestamp']
-                    })
-                    
                 conversations.append(conv)
-                
-            with open(output_path, 'w', encoding='utf-8') as f:
-                json.dump({'conversations': conversations}, f, indent=2, ensure_ascii=False)
+        return json.dumps({'conversations': conversations}, indent=2)
+
+    def export_all(self, output_path: str, fmt: str = "excel") -> None:
+        content = self.export_all_conversations(fmt)
+        if content is None:
+            return
+        if fmt == "excel":
+            with open(output_path, "wb") as f:
+                f.write(content)
         else:
-            raise ValueError(f"Unsupported format for bulk export: {format}")
+            with open(output_path, "w", encoding="utf-8") as f:
+                f.write(content)

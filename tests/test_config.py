@@ -8,10 +8,14 @@ from pplx_cli.config import Config, PerplexityModel, save_api_key, load_api_key
 def temp_config_dir(tmp_path, monkeypatch):
     monkeypatch.setattr("pplx_cli.config.CONFIG_DIR", tmp_path)
     monkeypatch.setattr("pplx_cli.config.CONFIG_FILE", tmp_path / "config.json")
-    # Reset singleton instance
-    if hasattr(Config, '_instance'):
-        delattr(Config, '_instance')
+    Config._instance = None
     return tmp_path
+
+@pytest.fixture(autouse=True)
+def reset_config_singleton():
+    Config._instance = None
+    yield
+    Config._instance = None
 
 
 

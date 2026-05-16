@@ -238,56 +238,54 @@ class BatchIndexer:
             return migrated_count, failed_count
     
     def reindex_all(self, clear_first: bool = True) -> bool:
-        """
-        Reindex all content in the RAG database.
-        
-        Args:
-            clear_first: Clear existing vector indices before reindexing
-            
-        Returns:
-            True if successful, False otherwise
-        """
         try:
-            if clear_first:
-                logger.info("Clearing existing vector indices...")
-                # Note: We'd need to implement vector store clearing
-                # For now, we'll just log this
-            
-            # Get all documents from RAG database
             with sqlite3.connect(self.rag_db.db_path) as conn:
+                if clear_first:
+                    conn.execute(f"DELETE FROM {self.rag_db.table_name}_vectors")
+
                 conn.row_factory = sqlite3.Row
                 cursor = conn.execute(f"""
-                    SELECT COUNT(*) FROM {self.rag_db.table_name}
+                    SELECT id, content FROM {self.rag_db.table_name}
+                    ORDER BY id
                 """)
-                total_docs = cursor.fetchone()[0]
-            
-            if total_docs == 0:
+                all_docs = [dict(row) for row in cursor.fetchall()]
+
+            if not all_docs:
                 logger.info("No documents found to reindex")
                 return True
-            
-            progress = IndexingProgress(total_docs, "Reindexing") if self.show_progress else None
-            
+
+            progress = IndexingProgress(len(all_docs), "Reindexing") if self.show_progress else None
+
             reindexed_count = 0
             failed_count = 0
-            
-            # Stream documents and reindex
-            for batch in self._stream_rag_documents():
-                for doc in batch:
-                    try:
-                        # Re-add document to vector store
-                        # This would trigger re-embedding
-                        # Implementation depends on vector store capabilities
-                        reindexed_count += 1
-                    except Exception as e:
-                        logger.error(f"Failed to reindex document {doc['id']}: {e}")
-                        failed_count += 1
-                    
+
+            for i in range(0, len(all_docs), self.batch_size):
+                batch = all_docs[i:i + self.batch_size]
+                contents = [doc["content"] for doc in batch]
+                doc_ids = [doc["id"] for doc in batch]
+
+                try:
+                    embeddings = self.rag_db.embedding_model.encode(contents, use_cache=False)
+
+                    with sqlite3.connect(self.rag_db.db_path) as conn:
+                        for doc_id, embedding in zip(doc_ids, embeddings):
+                            embedding_blob = embedding.astype(np.float32).tobytes()
+                            conn.execute(f"""
+                                INSERT OR REPLACE INTO {self.rag_db.table_name}_vectors (document_id, embedding)
+                                VALUES (?, ?)
+                            """, (doc_id, embedding_blob))
+                            reindexed_count += 1
+                            if progress:
+                                progress.update(processed=1)
+                except Exception as e:
+                    logger.error(f"Batch reindexing failed: {e}")
+                    failed_count += len(batch)
                     if progress:
-                        progress.update(processed=1, failed=0 if failed_count == 0 else 1)
-            
+                        progress.update(processed=len(batch), failed=len(batch))
+
             logger.info(f"Reindexing complete: {reindexed_count} documents, {failed_count} failed")
             return failed_count == 0
-            
+
         except Exception as e:
             logger.error(f"Reindexing failed: {e}")
             return False

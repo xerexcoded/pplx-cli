@@ -4,7 +4,7 @@ A powerful command-line interface for Perplexity AI with **ultra-fast RAG (Retri
 
 ## 🚀 Key Features
 
-- 🔍 **Fast RAG Search**: Lightning-fast semantic search across all your content using BGE embeddings and sqlite-vec
+- 🔍 **Fast RAG Search**: Lightning-fast semantic search across all your content using BGE embeddings
 - 🧠 **Intelligent Hybrid Search**: Combines vector similarity and keyword search with Reciprocal Rank Fusion
 - 📚 **Unified Knowledge Base**: Search notes and chat history together in a single, powerful interface
 - 🔄 **Seamless Migration**: Automatically migrate your existing data to the new RAG system
@@ -12,6 +12,7 @@ A powerful command-line interface for Perplexity AI with **ultra-fast RAG (Retri
 - 📝 **Advanced Note Management**: Local storage with AI-powered semantic search
 - 💬 **Complete Chat History**: Track, analyze, and export all conversations
 - 📊 **Rich Analytics**: Detailed statistics and insights about your usage
+- 🕸️ **Knowledge Graph**: Visualize Obsidian-style markdown vaults as interactive D3.js force graphs
 - 🖥️ **Cross-Platform**: Works on macOS, Linux, WSL2, and Windows
 
 ## Installation
@@ -183,6 +184,50 @@ The RAG system uses cutting-edge 2025 technology:
 - Detailed error reporting and retry logic
 - Can re-run anytime to sync new content
 
+## 🕸️ Knowledge Graph — Visualize Your Markdown Vault
+
+Turn any folder of interlinked markdown files into an interactive, Obsidian-style knowledge graph in your browser. Perfect for visualizing your personal wiki, Zettelkasten, or project documentation.
+
+![Knowledge Graph Screenshot](screenshot.png)
+
+### How It Works
+
+Parses `[[wikilinks]]` (with aliases via `|`), `[text](url)` markdown links, relative paths, and external URLs. Renders as an interactive D3.js force-directed graph with drag, zoom, tooltips, and node sizing by connection count.
+
+### Usage
+
+```bash
+# Visualize a markdown vault
+perplexity knowledge-graph --dir ~/my-vault
+
+# Or your Obsidian vault
+perplexity knowledge-graph --dir ~/Documents/ObsidianVault
+
+# Save HTML for offline viewing
+perplexity knowledge-graph --dir ~/my-vault --output ~/Desktop/graph.html
+
+# With a custom title
+perplexity knowledge-graph --dir ~/my-vault --title "My Knowledge Base"
+```
+
+### Demo Script
+
+Seed a sample vault and launch the graph:
+
+```bash
+./scripts/demo-knowledge-graph.sh
+```
+
+### Graph Features
+
+- **Force-directed layout**: Nodes repel, links attract — clusters form naturally
+- **Color-coded nodes**: Blue for internal files, red for external/absent references
+- **Weighted nodes**: Larger circles for highly-connected files
+- **Drag & zoom**: Pan, zoom, and rearrange nodes interactively
+- **Tooltips**: Hover any node to see its file path
+- **Wikilink parsing**: Supports `[[link]]`, `[[link|Alias]]`, `[[link#heading]]`
+- **Markdown link parsing**: Handles `[text](url)`, relative paths, bare URLs
+
 ## Traditional Commands
 
 ### Direct AI Chat
@@ -268,6 +313,11 @@ perplexity ask-notes "What did I write about machine learning?"
 | `rag-stats` | Show database stats | `perplexity rag-stats` |
 | `rag-index` | Re-index content | `perplexity rag-index` |
 | `rag-config` | Configure RAG | `perplexity rag-config --show` |
+
+### Knowledge Graph Commands
+| Command | Purpose | Example |
+|---------|---------|---------|
+| `knowledge-graph` | Visualize markdown vault | `perplexity knowledge-graph --dir ~/vault` |
 
 ### Traditional Commands
 | Command | Purpose | Example |

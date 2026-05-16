@@ -414,8 +414,11 @@ class RagDB:
                     embedding = np.frombuffer(embedding_blob, dtype=np.float32)
                     
                     # Calculate cosine similarity
-                    similarity = float(np.dot(query_embedding, embedding) / 
-                                     (np.linalg.norm(query_embedding) * np.linalg.norm(embedding)))
+                    similarity = np.dot(query_embedding, embedding).item()
+                    normalized = np.linalg.norm(query_embedding) * np.linalg.norm(embedding)
+                    if normalized > 0:
+                        similarity = similarity / normalized
+                    similarity = float(similarity)
                     
                     # Filter by similarity threshold
                     if similarity < similarity_threshold:
@@ -465,10 +468,10 @@ class RagDB:
                 
                 # Build the SQL query
                 base_query = f"""
-                    SELECT d.*, fts.rank
-                    FROM {self.table_name}_fts fts
-                    JOIN {self.table_name} d ON fts.content_id = d.id
-                    WHERE fts MATCH ?
+                    SELECT d.*, rank
+                    FROM {self.table_name}_fts
+                    JOIN {self.table_name} d ON {self.table_name}_fts.content_id = d.id
+                    WHERE {self.table_name}_fts MATCH ?
                 """
                 
                 params = [query]
@@ -480,7 +483,7 @@ class RagDB:
                     base_query += f" AND d.content_type IN ({placeholders})"
                     params.extend(content_type_values)
                 
-                base_query += " ORDER BY fts.rank LIMIT ?"
+                base_query += " ORDER BY rank LIMIT ?"
                 params.append(limit)
                 
                 cursor = conn.execute(base_query, params)
@@ -489,7 +492,7 @@ class RagDB:
                 for row in cursor.fetchall():
                     row_dict = dict(row)
                     metadata = json.loads(row_dict.get("metadata", "{}"))
-                    
+
                     document_data = {
                         "content": row_dict["content"],
                         "metadata": metadata,
@@ -497,10 +500,9 @@ class RagDB:
                         "source_id": row_dict["source_id"],
                         "chunk_index": row_dict["chunk_index"]
                     }
-                    
-                    # FTS rank as similarity score (normalized)
-                    score = 1.0  # Simple score for keyword matches
-                    results.append((document_data, score))
+
+                    score = row_dict.get("rank", 1.0)
+                    results.append((document_data, float(score)))
                 
                 return results
                 

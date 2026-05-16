@@ -70,11 +70,17 @@ class PerplexityModel(str, Enum):
     @classmethod
     def get_friendly_name(cls, model: 'PerplexityModel') -> str:
         return model.name.lower()
+import threading
+
+...
 
 class Config:
     API_ENDPOINT = "https://api.perplexity.ai/chat/completions"
     TIMEOUT = 30  # seconds
     DEFAULT_MODEL = PerplexityModel.SONAR
+
+    _instance = None
+    _lock = threading.Lock()
 
     def __init__(self):
         self.api_key = load_api_key()
@@ -83,8 +89,10 @@ class Config:
 
     @classmethod
     def get_instance(cls):
-        if not hasattr(cls, '_instance'):
-            cls._instance = cls()
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = cls()
         return cls._instance
 
     @property

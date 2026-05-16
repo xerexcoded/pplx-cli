@@ -3,8 +3,11 @@ from pathlib import Path
 from typing import Optional, List, Tuple
 from datetime import datetime
 import json
+import logging
 import numpy as np
 from sentence_transformers import SentenceTransformer
+
+logger = logging.getLogger(__name__)
 
 class NotesDB:
     # Even smaller model, only 22MB
@@ -52,8 +55,7 @@ class NotesDB:
             embedding = self.model.encode(text, show_progress_bar=False)
             return embedding.astype(np.float32).tobytes()
         except Exception as e:
-            print(f"Warning: Could not generate embedding: {str(e)}")
-            # Return empty embedding as fallback
+            logger.warning(f"Could not generate embedding: {str(e)}")
             return np.zeros(384, dtype=np.float32).tobytes()
 
     def _load_embedding(self, blob: bytes) -> np.ndarray:
@@ -158,9 +160,11 @@ class NotesDB:
                     note_embedding = note_embedding.astype(np.float32)
                     
                     # Calculate cosine similarity
-                    similarity = np.dot(query_embedding, note_embedding) / (
-                        np.linalg.norm(query_embedding) * np.linalg.norm(note_embedding)
-                    )
+                    similarity = np.dot(query_embedding, note_embedding).item()
+                    norm = np.linalg.norm(query_embedding) * np.linalg.norm(note_embedding)
+                    if norm > 0:
+                        similarity = similarity / norm
+                    similarity = float(similarity)
                     
                     results.append((note_dict, float(similarity)))
                 
@@ -168,8 +172,7 @@ class NotesDB:
                 results.sort(key=lambda x: x[1], reverse=True)
                 return results[:top_k]
         except Exception as e:
-            print(f"Warning: Search failed: {str(e)}")
-            # Fallback to returning most recent notes
+            logger.warning(f"Search failed: {str(e)}")
             with sqlite3.connect(self.db_path) as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.execute("SELECT * FROM notes ORDER BY created_at DESC LIMIT ?", (top_k,))
