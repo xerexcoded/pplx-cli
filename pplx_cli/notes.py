@@ -97,11 +97,11 @@ class NotesDB:
             conn.row_factory = sqlite3.Row
             if tag:
                 cursor = conn.execute(
-                    "SELECT * FROM notes WHERE tags LIKE ? ORDER BY created_at DESC",
+                    "SELECT * FROM notes WHERE tags LIKE ? ORDER BY created_at DESC, id DESC",
                     (f'%"{tag}"%',)
                 )
             else:
-                cursor = conn.execute("SELECT * FROM notes ORDER BY created_at DESC")
+                cursor = conn.execute("SELECT * FROM notes ORDER BY created_at DESC, id DESC")
             return [dict(row) for row in cursor.fetchall()]
 
     def update_note(self, note_id: int, title: Optional[str] = None, 
