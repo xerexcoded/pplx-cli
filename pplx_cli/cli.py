@@ -1,4 +1,5 @@
 import typer
+from typer.core import TyperGroup
 from typing import List, Optional, Union
 import getpass
 import sys
@@ -29,6 +30,8 @@ from .rag import RagDB, ContentType, HybridSearchEngine, SearchMode, BatchIndexe
 
 # Import knowledge graph components
 from .knowledge_graph import generate_knowledge_graph_html, launch_knowledge_graph
+from .wiki import WikiWorkspace
+from .wiki.mcp import run_mcp_server
 
 def version_callback(value: bool):
     """Callback for --version flag."""
@@ -37,7 +40,26 @@ def version_callback(value: bool):
         typer.echo(f"Perplexity CLI version {version_str}")
         raise typer.Exit()
 
+class RagGroup(TyperGroup):
+    """Route legacy ``rag <query>`` invocations to the hidden search command."""
+
+    def resolve_command(self, ctx, args):
+        if args and args[0] not in self.commands and not args[0].startswith("-"):
+            command = self.get_command(ctx, "search")
+            if command is not None:
+                return "search", command, args
+        return super().resolve_command(ctx, args)
+
+
 app = typer.Typer()
+wiki_app = typer.Typer(help="Build and query a local, evidence-backed Markdown wiki.")
+rag_app = typer.Typer(
+    cls=RagGroup,
+    invoke_without_command=True,
+    help="Search local notes/chat history or evaluate a wiki retrieval dataset.",
+)
+app.add_typer(wiki_app, name="wiki")
+app.add_typer(rag_app, name="rag")
 
 @app.callback(invoke_without_command=True)
 def main(
@@ -198,7 +220,9 @@ def ask(
         case_sensitive=False
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose output"),
-    save_history: bool = typer.Option(True, "--save-history/--no-save-history", help="Save the conversation to history")
+    save_history: bool = typer.Option(True, "--save-history/--no-save-history", help="Save the conversation to history"),
+    wiki: Optional[Path] = typer.Option(None, "--wiki", help="Answer from an evidence-backed wiki workspace"),
+    web: bool = typer.Option(False, "--web", help="With --wiki, supplement the answer with Perplexity web research"),
 ):
     """Ask a question to the configured AI provider and get a response."""
     try:
@@ -216,10 +240,32 @@ def ask(
             typer.echo(f"Using provider: {settings.display_name}")
             typer.echo(f"Using model: {model_name}")
 
-        typer.echo(f"Querying {settings.display_name}...")
-        response = query_chat(
-            query, model=selected_model, provider=selected_provider
-        )
+        if wiki:
+            if web:
+                ensure_api_key(Provider.PERPLEXITY)
+            typer.echo(f"Querying wiki evidence with {settings.display_name}...")
+            answer = WikiWorkspace(wiki).query(
+                query,
+                model=selected_model,
+                provider=selected_provider,
+                web=web,
+            )
+            response = answer.content
+            typer.echo(f"Answer: {response}")
+            typer.echo("\nLocal evidence:")
+            for result in answer.local_results:
+                typer.echo(f"- {result.citation}")
+            if answer.web_completion:
+                typer.echo(f"\nWeb research:\n{answer.web_completion.content}")
+                for index, citation in enumerate(answer.web_completion.citations, start=1):
+                    typer.echo(f"- [W{index}] {citation}")
+        else:
+            if web:
+                raise typer.BadParameter("--web is only available with --wiki")
+            typer.echo(f"Querying {settings.display_name}...")
+            response = query_chat(
+                query, model=selected_model, provider=selected_provider
+            )
 
         # Save to chat history if enabled
         if save_history:
@@ -228,7 +274,8 @@ def ask(
             db.add_message(conversation_id, "user", query)
             db.add_message(conversation_id, "assistant", response)
         
-        typer.echo(f"Answer: {response}")
+        if not wiki:
+            typer.echo(f"Answer: {response}")
     except Exception as e:
         typer.echo(f"Error: {str(e)}", err=True)
         raise typer.Exit(code=1)
@@ -558,9 +605,9 @@ def get_rag_db() -> RagDB:
     return RagDB(rag_db_path)
 
 
-@app.command(name="rag")
+@rag_app.command("search", hidden=True)
 def rag_search(
-    query: str = typer.Argument(..., help="Search query"),
+    query_parts: List[str] = typer.Argument(..., help="Search query"),
     mode: str = typer.Option("hybrid", "--mode", help="Search mode: vector, keyword, or hybrid"),
     source: str = typer.Option("all", "--source", help="Content source: all, notes, or chats"),
     limit: int = typer.Option(5, "--limit", help="Maximum number of results"),
@@ -569,6 +616,7 @@ def rag_search(
     explain: bool = typer.Option(False, "--explain", help="Explain search process")
 ):
     """Search across all your content using fast RAG."""
+    query = " ".join(query_parts).strip()
     try:
         # Parse search mode
         try:
@@ -803,6 +851,7 @@ def rag_index(
 def rag_config(
     model: Optional[str] = typer.Option(None, "--model", help="Embedding model: small, base, or large"),
     device: Optional[str] = typer.Option(None, "--device", help="Device: cpu, cuda, or mps"),
+    embedding_provider: Optional[str] = typer.Option(None, "--embedding-provider", help="Embedding backend: local or perplexity"),
     show: bool = typer.Option(False, "--show", help="Show current configuration")
 ):
     """Configure RAG settings."""
@@ -824,8 +873,8 @@ def rag_config(
         updated = False
 
         if model:
-            if model not in ["small", "base", "large"]:
-                typer.echo("Invalid model. Use: small, base, or large", err=True)
+            if model not in ["small", "base", "large"] and not embedding_provider == "perplexity":
+                typer.echo("Invalid local model. Use: small, base, or large", err=True)
                 raise typer.Exit(code=1)
 
             import json
@@ -859,6 +908,23 @@ def rag_config(
             typer.echo(f"Device set to: {device}")
             updated = True
 
+        if embedding_provider:
+            if embedding_provider not in ["local", "perplexity"]:
+                typer.echo("Invalid embedding provider. Use: local or perplexity", err=True)
+                raise typer.Exit(code=1)
+            import json
+            rag_config_path = Path.home() / ".config" / "perplexity" / "rag_config.json"
+            rag_config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_data = {}
+            if rag_config_path.exists():
+                with open(rag_config_path) as f:
+                    config_data = json.load(f)
+            config_data["embedding_provider"] = embedding_provider
+            with open(rag_config_path, "w") as f:
+                json.dump(config_data, f)
+            typer.echo(f"Embedding provider set to: {embedding_provider}")
+            updated = True
+
         if updated:
             from .rag.embeddings import reset_embedding_model
             reset_embedding_model()
@@ -869,6 +935,232 @@ def rag_config(
     except Exception as e:
         typer.echo(f"Configuration failed: {str(e)}", err=True)
         raise typer.Exit(code=1)
+
+
+def _wiki_workspace(directory: Path) -> WikiWorkspace:
+    return WikiWorkspace.initialize(directory)
+
+
+def _print_wiki_results(results) -> None:
+    if not results:
+        typer.echo("No evidence found.")
+        return
+    for index, result in enumerate(results, start=1):
+        typer.echo(f"\n{index}. [{result.source_type.upper()}] {result.title} ({result.score:.3f})")
+        typer.echo(f"   {result.locator} — {result.uri}")
+        typer.echo(f"   {result.content[:500]}" + ("..." if len(result.content) > 500 else ""))
+        typer.echo(f"   {result.citation}")
+
+
+@wiki_app.command("init")
+def wiki_init(
+    directory: Path = typer.Option(..., "--dir", help="Directory that will hold source files, wiki/, and .pplx/")
+):
+    """Initialize an open Markdown wiki workspace without moving source files."""
+    workspace = _wiki_workspace(directory)
+    typer.echo(f"Initialized wiki workspace: {workspace.root_dir}")
+    typer.echo(f"Generated pages: {workspace.wiki_dir}")
+    typer.echo(f"Rebuildable index: {workspace.state_dir}")
+
+
+@wiki_app.command("ingest")
+def wiki_ingest(
+    sources: List[str] = typer.Argument(..., help="Markdown/PDF file, directory, or HTTP(S) URL"),
+    directory: Path = typer.Option(..., "--dir", help="Initialized wiki workspace directory"),
+    tag: Optional[List[str]] = typer.Option(None, "--tag", help="Tag source metadata for later filtering"),
+):
+    """Ingest Markdown, text PDFs, or a captured web page into the local index."""
+    workspace = _wiki_workspace(directory)
+    failed = False
+    for source in sources:
+        for result in workspace.ingest(source, tags=tag):
+            if result.error:
+                failed = True
+                typer.echo(f"{result.status.upper()}: {result.source}: {result.error}", err=True)
+            else:
+                typer.echo(
+                    f"{result.status.upper()}: {result.source} "
+                    f"(source={result.source_id}, chunks={result.chunks})"
+                )
+    if failed:
+        raise typer.Exit(code=1)
+
+
+@wiki_app.command("sync")
+def wiki_sync(
+    directory: Path = typer.Option(..., "--dir", help="Initialized wiki workspace directory")
+):
+    """Discover, reindex, and deactivate changed local source files."""
+    outcome = _wiki_workspace(directory).sync()
+    typer.echo(" ".join(f"{name}={count}" for name, count in outcome.items() if name != "errors"))
+    for error in outcome["errors"]:
+        typer.echo(f"ERROR: {error}", err=True)
+    if outcome["failed"]:
+        raise typer.Exit(code=1)
+
+
+@wiki_app.command("watch")
+def wiki_watch(
+    directory: Path = typer.Option(..., "--dir", help="Initialized wiki workspace directory"),
+    interval: float = typer.Option(1.0, "--interval", min=0.2, help="Polling debounce in seconds"),
+):
+    """Synchronize source changes in the foreground; compilation is always explicit."""
+    typer.echo("Watching for source changes. Press Ctrl+C to stop.")
+    try:
+        for outcome in _wiki_workspace(directory).watch(interval=interval):
+            typer.echo(" ".join(f"{name}={count}" for name, count in outcome.items() if name != "errors"))
+            for error in outcome["errors"]:
+                typer.echo(f"ERROR: {error}", err=True)
+    except KeyboardInterrupt:
+        typer.echo("\nWiki watch stopped.")
+
+
+@wiki_app.command("compile")
+def wiki_compile(
+    directory: Path = typer.Option(..., "--dir", help="Initialized wiki workspace directory"),
+    provider: Optional[str] = typer.Option(None, "--provider", help="Writer provider override"),
+    model: Optional[str] = typer.Option(None, "--model", help="Writer model override"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Report pages without writing them"),
+):
+    """Compile indexed sources into interlinked Markdown pages with source footnotes."""
+    selected_provider = get_provider_from_name(provider)
+    ensure_api_key(selected_provider)
+    selected_model = get_model_for_provider(model, selected_provider)
+    pages = _wiki_workspace(directory).compile(
+        provider=selected_provider, model=selected_model, dry_run=dry_run
+    )
+    action = "Would generate" if dry_run else "Generated"
+    typer.echo(f"{action} {len(pages)} page(s):")
+    for page in pages:
+        typer.echo(f"- {page}")
+
+
+@wiki_app.command("search")
+def wiki_search(
+    query: str = typer.Argument(..., help="Search query"),
+    directory: Path = typer.Option(..., "--dir", help="Initialized wiki workspace directory"),
+    limit: int = typer.Option(10, "--limit", min=1, max=50),
+    source_type: Optional[List[str]] = typer.Option(None, "--source-type", help="Restrict to markdown, pdf, or web"),
+    tag: Optional[List[str]] = typer.Option(None, "--tag", help="Require source metadata tags"),
+):
+    """Run fast hybrid search over authoritative wiki sources."""
+    _print_wiki_results(
+        _wiki_workspace(directory).search(
+            query, limit=limit, source_types=source_type, tags=tag
+        )
+    )
+
+
+@wiki_app.command("query")
+def wiki_query(
+    question: str = typer.Argument(..., help="Question to answer from wiki evidence"),
+    directory: Path = typer.Option(..., "--dir", help="Initialized wiki workspace directory"),
+    provider: Optional[str] = typer.Option(None, "--provider", help="Writer provider override"),
+    model: Optional[str] = typer.Option(None, "--model", help="Writer model override"),
+    web: bool = typer.Option(False, "--web", help="Supplement with Perplexity web research"),
+    limit: int = typer.Option(8, "--limit", min=1, max=20),
+):
+    """Answer from local evidence, optionally followed by distinct web research."""
+    selected_provider = get_provider_from_name(provider)
+    ensure_api_key(selected_provider)
+    if web:
+        ensure_api_key(Provider.PERPLEXITY)
+    selected_model = get_model_for_provider(model, selected_provider)
+    answer = _wiki_workspace(directory).query(
+        question,
+        provider=selected_provider,
+        model=selected_model,
+        web=web,
+        limit=limit,
+    )
+    typer.echo(answer.content)
+    typer.echo("\nLocal evidence:")
+    for result in answer.local_results:
+        typer.echo(f"- {result.citation}")
+    if answer.web_completion:
+        typer.echo(f"\nWeb research:\n{answer.web_completion.content}")
+        for index, citation in enumerate(answer.web_completion.citations, start=1):
+            typer.echo(f"- [W{index}] {citation}")
+
+
+@wiki_app.command("status")
+def wiki_status(
+    directory: Path = typer.Option(..., "--dir", help="Initialized wiki workspace directory")
+):
+    """Show source, retrieval, and generated-page diagnostics."""
+    for key, value in _wiki_workspace(directory).status().items():
+        typer.echo(f"{key}: {value}")
+
+
+@wiki_app.command("lint")
+def wiki_lint(
+    directory: Path = typer.Option(..., "--dir", help="Initialized wiki workspace directory")
+):
+    """Check generated pages for stale citations and broken wikilinks."""
+    outcome = _wiki_workspace(directory).lint()
+    for warning in outcome["warnings"]:
+        typer.echo(f"WARNING: {warning}", err=True)
+    for error in outcome["errors"]:
+        typer.echo(f"ERROR: {error}", err=True)
+    if outcome["errors"]:
+        raise typer.Exit(code=1)
+    typer.echo("Wiki lint passed." if not outcome["warnings"] else "Wiki lint passed with warnings.")
+
+
+@wiki_app.command("graph")
+def wiki_graph(
+    directory: Path = typer.Option(..., "--dir", help="Initialized wiki workspace directory"),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Write graph HTML instead of launching it"),
+    title: Optional[str] = typer.Option(None, "--title", help="Graph title"),
+):
+    """Visualize the generated wiki's Markdown links."""
+    workspace = _wiki_workspace(directory)
+    html_path = generate_knowledge_graph_html(workspace.wiki_dir, output, title or "PPLX Wiki")
+    if output:
+        typer.echo(f"Knowledge graph saved to: {html_path}")
+    else:
+        launch_knowledge_graph(html_path)
+
+
+@wiki_app.command("eval")
+def wiki_eval(
+    dataset: Path = typer.Option(..., "--dataset", exists=True, readable=True, help="JSONL query/relevant_source_ids set"),
+    directory: Path = typer.Option(..., "--dir", help="Initialized wiki workspace directory"),
+    limit: int = typer.Option(10, "--limit", min=1, max=50),
+):
+    """Report retrieval Recall@k, MRR, nDCG, and failed queries."""
+    outcome = _wiki_workspace(directory).evaluate(dataset, limit=limit)
+    typer.echo(json.dumps(outcome, indent=2))
+
+
+@wiki_app.command("mcp")
+def wiki_mcp(
+    directory: Path = typer.Option(..., "--dir", help="Initialized wiki workspace directory")
+):
+    """Expose read-only wiki search, page reading, and status over stdio MCP."""
+    run_mcp_server(directory)
+
+
+@app.command(name="rag-eval")
+def rag_eval(
+    dataset: Path = typer.Option(..., "--dataset", exists=True, readable=True, help="JSONL query/relevant_source_ids set"),
+    directory: Path = typer.Option(..., "--dir", help="Wiki workspace to evaluate"),
+    limit: int = typer.Option(10, "--limit", min=1, max=50),
+):
+    """Backward-compatible top-level alias for wiki retrieval evaluation."""
+    outcome = _wiki_workspace(directory).evaluate(dataset, limit=limit)
+    typer.echo(json.dumps(outcome, indent=2))
+
+
+@rag_app.command("eval")
+def rag_nested_eval(
+    dataset: Path = typer.Option(..., "--dataset", exists=True, readable=True, help="JSONL query/relevant_source_ids set"),
+    directory: Path = typer.Option(..., "--dir", help="Wiki workspace to evaluate"),
+    limit: int = typer.Option(10, "--limit", min=1, max=50),
+):
+    """Report Recall@k, MRR, nDCG, and failed queries for a wiki retrieval dataset."""
+    outcome = _wiki_workspace(directory).evaluate(dataset, limit=limit)
+    typer.echo(json.dumps(outcome, indent=2))
 
 
 @app.command(name="knowledge-graph")

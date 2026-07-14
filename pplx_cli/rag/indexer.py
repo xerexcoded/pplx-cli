@@ -8,6 +8,7 @@ operations with progress tracking and error handling.
 import sqlite3
 import json
 import logging
+import numpy as np
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Callable, Iterator, Tuple
 from datetime import datetime
@@ -242,6 +243,11 @@ class BatchIndexer:
             with sqlite3.connect(self.rag_db.db_path) as conn:
                 if clear_first:
                     conn.execute(f"DELETE FROM {self.rag_db.table_name}_vectors")
+                    self.rag_db._load_sqlite_vec(conn)
+                    try:
+                        conn.execute(f"DELETE FROM {self.rag_db.vector_table_name}")
+                    except sqlite3.Error:
+                        pass
 
                 conn.row_factory = sqlite3.Row
                 cursor = conn.execute(f"""
@@ -268,12 +274,24 @@ class BatchIndexer:
                     embeddings = self.rag_db.embedding_model.encode(contents, use_cache=False)
 
                     with sqlite3.connect(self.rag_db.db_path) as conn:
+                        native_store = self.rag_db._ensure_native_vector_table(
+                            conn, int(embeddings[0].shape[0])
+                        )
                         for doc_id, embedding in zip(doc_ids, embeddings):
                             embedding_blob = embedding.astype(np.float32).tobytes()
+                            conn.execute(
+                                f"DELETE FROM {self.rag_db.table_name}_vectors WHERE document_id = ?",
+                                (doc_id,),
+                            )
                             conn.execute(f"""
                                 INSERT OR REPLACE INTO {self.rag_db.table_name}_vectors (document_id, embedding)
                                 VALUES (?, ?)
                             """, (doc_id, embedding_blob))
+                            if native_store:
+                                conn.execute(
+                                    f"INSERT OR REPLACE INTO {self.rag_db.vector_table_name}(rowid, embedding) VALUES (?, ?)",
+                                    (doc_id, embedding.astype(np.float32)),
+                                )
                             reindexed_count += 1
                             if progress:
                                 progress.update(processed=1)

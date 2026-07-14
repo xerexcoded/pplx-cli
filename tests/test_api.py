@@ -1,6 +1,6 @@
 import pytest
 
-from pplx_cli.api import query_chat, query_perplexity
+from pplx_cli.api import query_chat, query_chat_completion, query_perplexity
 from pplx_cli.config import (
     Config,
     PerplexityModel,
@@ -107,3 +107,25 @@ def test_query_perplexity_remains_backwards_compatible(requests_mock):
     )
 
     assert query_perplexity("test", PerplexityModel.SONAR) == "Test response"
+
+
+def test_query_chat_completion_retains_grounding_metadata(requests_mock):
+    config = Config.get_instance()
+    config.api_key = "test-api-key"
+    requests_mock.post(
+        Config.API_ENDPOINT,
+        json={
+            "model": "sonar",
+            "choices": [{"message": {"content": "Grounded answer"}}],
+            "citations": ["https://example.com/source"],
+            "search_results": [{"title": "Source", "url": "https://example.com/source"}],
+            "usage": {"total_tokens": 12},
+        },
+    )
+
+    completion = query_chat_completion("test", provider=Provider.PERPLEXITY)
+
+    assert completion.content == "Grounded answer"
+    assert completion.citations == ["https://example.com/source"]
+    assert completion.search_results[0]["title"] == "Source"
+    assert completion.usage["total_tokens"] == 12
