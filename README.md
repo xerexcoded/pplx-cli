@@ -1,11 +1,11 @@
 # Perplexity CLI
 
-A powerful command-line interface for Perplexity, NVIDIA NIM, and OpenRouter with **ultra-fast RAG (Retrieval Augmented Generation)** capabilities. Search through all your notes and chat history in milliseconds using cutting-edge vector search technology.
+A command-line interface for Perplexity, NVIDIA NIM, and OpenRouter with local notes, evidence-first RAG, and a Markdown-compatible LLM Wiki. Search notes, chat history, and curated research sources without giving up source provenance.
 
 ## 🚀 Key Features
 
-- 🔍 **Fast RAG Search**: Lightning-fast semantic search across all your content using BGE embeddings
-- 🧠 **Intelligent Hybrid Search**: Combines vector similarity and keyword search with Reciprocal Rank Fusion
+- 🔍 **Evidence-First RAG**: Semantic and FTS retrieval across local content using BGE embeddings by default
+- 🧠 **Hybrid Search**: Combines vector similarity and keyword search with Reciprocal Rank Fusion
 - 📚 **Unified Knowledge Base**: Search notes and chat history together in a single, powerful interface
 - 🔄 **Seamless Migration**: Automatically migrate your existing data to the new RAG system
 - 🤖 **Multi-Provider AI Chat**: Use Perplexity Sonar, NVIDIA NIM, or OpenRouter models with one CLI
@@ -13,6 +13,7 @@ A powerful command-line interface for Perplexity, NVIDIA NIM, and OpenRouter wit
 - 💬 **Complete Chat History**: Track, analyze, and export all conversations
 - 📊 **Rich Analytics**: Detailed statistics and insights about your usage
 - 🕸️ **Knowledge Graph**: Visualize Obsidian-style markdown vaults as interactive D3.js force graphs
+- 📚 **Native LLM Wiki**: Compile Markdown, text PDFs, and captured web pages into cited, linked Markdown pages
 - 🖥️ **Cross-Platform**: Works on macOS, Linux, WSL2, and Windows
 
 ## Installation
@@ -58,13 +59,14 @@ perplexity rag "machine learning concepts"
 
 The RAG system transforms your CLI into a **powerful personal knowledge assistant** that can instantly search through all your notes and conversations. This is the **most important feature** of the CLI - it makes all your accumulated knowledge instantly searchable and actionable.
 
-### ⚡ Why RAG is Game-Changing
+### Why RAG is Useful
 
-- **Lightning Fast**: Search 10,000+ documents in under 100ms
 - **Semantic Understanding**: Find content by meaning, not just keywords
 - **Unified Search**: One command searches both notes and chat history
-- **Superior Quality**: Uses BGE embeddings (63.55 MTEB score) for better results
+- **Inspectable Evidence**: Results retain source and chunk metadata
 - **Always Available**: Works completely offline once set up
+
+Vector retrieval uses `sqlite-vec` when the local Python/SQLite build permits extensions. If it cannot load, the CLI makes an exact in-process similarity search instead and reports that fallback in diagnostics. Benchmark latency depends on corpus size, model, and hardware; measure it against your own vault before setting an SLO.
 
 ### 🎯 Essential RAG Commands
 
@@ -115,7 +117,7 @@ perplexity rag-index
 
 # Configure embedding models and performance
 perplexity rag-config --show
-perplexity rag-config --model large --device gpu
+perplexity rag-config --model large --device cuda
 ```
 
 ### 🧠 Advanced RAG Features
@@ -158,24 +160,24 @@ perplexity rag "project requirements" --mode hybrid
 perplexity rag "client feedback" --limit 15
 ```
 
-### 🔬 Technical Excellence
+### Technical design
 
-The RAG system uses cutting-edge 2025 technology:
+The RAG system uses local embeddings, SQLite FTS5, and an optional native vector extension:
 
 - **BGE Embeddings**: State-of-the-art BAAI General Embedding models
   - `small`: 33M params, 62.17 MTEB score
   - `base`: 109M params, 63.55 MTEB score (default)
   - `large`: 335M params, 64.23 MTEB score
-- **sqlite-vec**: High-performance vector search directly in SQLite
-- **Hybrid Search**: Reciprocal Rank Fusion combines multiple ranking signals
-- **Smart Chunking**: Automatic text segmentation with overlap for optimal retrieval
-- **Performance Optimizations**: Quantization, caching, batch processing
+- **sqlite-vec**: Native KNN when the extension can be loaded; otherwise an explicit exact fallback
+- **Hybrid Search**: Reciprocal Rank Fusion combines vector and FTS5 candidates
+- **Inspectable chunking**: Chunk and source identifiers are retained with every result
+- **Configurable embeddings**: local BGE is the default; Perplexity embeddings are opt-in with `rag-config --embedding-provider perplexity`
 
 ### 💡 Migration Benefits
 
 **Why migrate to RAG?**
-- **10x Faster Search**: Vector search vs traditional text search
-- **Better Results**: Semantic understanding finds relevant content you'd miss with keywords
+- **Broader Recall**: Hybrid retrieval finds semantic and exact-term matches
+- **Safer Results**: Source IDs and locators make retrieval inspectable
 - **Unified Interface**: No more separate commands for notes vs chat history
 - **Future-Proof**: Built on modern RAG architecture used by leading AI companies
 - **Offline First**: All processing happens locally for privacy and speed
@@ -185,6 +187,63 @@ The RAG system uses cutting-edge 2025 technology:
 - Progress tracking with ETA estimates
 - Detailed error reporting and retry logic
 - Can re-run anytime to sync new content
+
+## 📚 Native LLM Wiki — persistent, cited research
+
+`perplexity wiki` turns a directory of sources into an open Markdown wiki. Your local source files are never moved or edited. The CLI creates only:
+
+```text
+research/
+├── papers/                  # Your Markdown and text PDFs stay in place
+├── wiki/                    # Generated, editable Markdown pages
+│   ├── overview.md
+│   └── sources/
+└── .pplx/                   # Rebuildable SQLite index and captured web snapshots
+```
+
+Start a workspace, index local files and a URL, then compile pages explicitly:
+
+```bash
+perplexity wiki init --dir ~/research
+perplexity wiki sync --dir ~/research
+perplexity wiki ingest https://example.com/article --dir ~/research --tag reading
+perplexity wiki compile --dir ~/research
+perplexity wiki lint --dir ~/research
+```
+
+`wiki sync` is idempotent: it adds new files, reindexes changed files, and deactivates deleted files. `wiki watch --dir ~/research` performs only that synchronization in the foreground; it never silently changes generated pages. `wiki compile` replaces only marked generated sections, preserving content under **Manual notes**.
+
+### Search and ask from evidence
+
+```bash
+# Inspect the authoritative chunks and their file/page/URL locators
+perplexity wiki search "retrieval citations" --dir ~/research --source-type pdf
+
+# Compose an answer from local evidence; [L…] references identify local sources
+perplexity wiki query "What do my sources say about RAG evaluation?" --dir ~/research
+
+# Keep current research visibly separate from local evidence
+perplexity wiki query "What changed this month?" --dir ~/research --web
+
+# Equivalent shortcut that also keeps normal chat-history behavior
+perplexity ask --wiki ~/research "What do I know about retrieval?"
+```
+
+The default answer path retrieves raw source chunks, not generated wiki prose, and prompts the writer to report insufficient evidence rather than guess. `--web` needs a Perplexity API key even when the local-answer writer is NVIDIA NIM or OpenRouter; it prints Perplexity URLs as separate `[W…]` references.
+
+### Agent access and retrieval evaluation
+
+```bash
+# Read-only MCP tools: wiki_search, wiki_read_page, wiki_read_source, wiki_status
+perplexity wiki mcp --dir ~/research
+
+# JSONL entries: {"query":"...", "relevant_source_ids":[1, 4]}
+perplexity wiki eval --dir ~/research --dataset retrieval-eval.jsonl
+# Nested RAG form (a top-level `rag-eval` alias also remains available)
+perplexity rag eval --dir ~/research --dataset retrieval-eval.jsonl
+```
+
+The evaluation report includes Recall@k, MRR, nDCG, and queries with no relevant source in the retrieved set.
 
 ## 🕸️ Knowledge Graph — Visualize Your Markdown Vault
 

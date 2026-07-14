@@ -196,6 +196,37 @@ def test_help_command(runner):
     assert "ask" in result.stdout
 
 
+def test_wiki_commands_are_exposed(runner):
+    result = runner.invoke(app, ["wiki", "--help"])
+    assert result.exit_code == 0
+    for command in ["init", "ingest", "sync", "compile", "query", "mcp"]:
+        assert command in result.stdout
+
+
+def test_wiki_init_creates_open_workspace(runner, tmp_path):
+    result = runner.invoke(app, ["wiki", "init", "--dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert (tmp_path / ".pplx" / "index.sqlite3").exists()
+    assert (tmp_path / "wiki").is_dir()
+
+
+def test_rag_search_syntax_remains_compatible_with_nested_eval(runner, monkeypatch):
+    class EmptySearchEngine:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def search(self, *args, **kwargs):
+            return []
+
+    monkeypatch.setattr("pplx_cli.cli.get_rag_db", lambda: object())
+    monkeypatch.setattr("pplx_cli.cli.HybridSearchEngine", EmptySearchEngine)
+
+    result = runner.invoke(app, ["rag", "semantic retrieval"])
+
+    assert result.exit_code == 0
+    assert "No results found" in result.stdout
+
+
 def test_version_flag(runner):
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0

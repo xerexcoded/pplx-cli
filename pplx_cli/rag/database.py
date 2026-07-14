@@ -79,6 +79,11 @@ class RagDB:
         self.db_path = Path(db_path)
         self.table_name = table_name
         self.embedding_model = embedding_model or get_embedding_model()
+        self.vector_table_name = f"{table_name}_vec"
+        self._sqlite_vec_import = None
+        self._sqlite_vec_checked = False
+        self._sqlite_vec_warning_emitted = False
+        self.native_vector_available = False
         
         # Create directory if it doesn't exist
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -90,6 +95,59 @@ class RagDB:
         self._init_vector_store()
         
         logger.info(f"Initialized RagDB at {self.db_path}")
+
+    def _load_sqlite_vec(self, conn: sqlite3.Connection) -> bool:
+        """Load the extension for this connection (SQLite extensions are not global)."""
+        if not self._sqlite_vec_checked:
+            try:
+                import sqlite_vec  # type: ignore
+
+                self._sqlite_vec_import = sqlite_vec
+            except ImportError:
+                self._sqlite_vec_import = None
+            self._sqlite_vec_checked = True
+        if self._sqlite_vec_import is None:
+            return False
+        try:
+            conn.enable_load_extension(True)
+            self._sqlite_vec_import.load(conn)
+            conn.enable_load_extension(False)
+            return True
+        except (AttributeError, sqlite3.Error) as error:
+            if not self._sqlite_vec_warning_emitted:
+                logger.warning("sqlite-vec unavailable; using exact vector fallback: %s", error)
+                self._sqlite_vec_warning_emitted = True
+            try:
+                conn.enable_load_extension(False)
+            except (AttributeError, sqlite3.Error):
+                pass
+            return False
+
+    def _ensure_native_vector_table(self, conn: sqlite3.Connection, dimension: int) -> bool:
+        if not self._load_sqlite_vec(conn):
+            return False
+        try:
+            config_table = f"{self.table_name}_vector_config"
+            conn.execute(
+                f"CREATE TABLE IF NOT EXISTS {config_table} (dimension INTEGER NOT NULL)"
+            )
+            row = conn.execute(f"SELECT dimension FROM {config_table} LIMIT 1").fetchone()
+            if row and int(row[0]) != dimension:
+                raise ValueError(
+                    "Embedding dimension changed; run `perplexity rag-index --clear` before searching."
+                )
+            if not row:
+                conn.execute(f"INSERT INTO {config_table}(dimension) VALUES (?)", (dimension,))
+            conn.execute(
+                f"CREATE VIRTUAL TABLE IF NOT EXISTS {self.vector_table_name} "
+                f"USING vec0(embedding float[{dimension}] distance_metric=cosine)"
+            )
+            self.native_vector_available = True
+            return True
+        except (sqlite3.Error, ValueError) as error:
+            logger.warning("Native sqlite-vec index unavailable; using exact fallback: %s", error)
+            self.native_vector_available = False
+            return False
     
     def _init_database(self):
         """Initialize the database schema."""
@@ -165,6 +223,7 @@ class RagDB:
         """Initialize sqlite-vec vector storage."""
         try:
             with sqlite3.connect(self.db_path) as conn:
+                self._load_sqlite_vec(conn)
                 # Create vectors table for storing embeddings
                 conn.execute(f"""
                     CREATE TABLE IF NOT EXISTS {self.table_name}_vectors (
@@ -182,7 +241,7 @@ class RagDB:
                 """)
             
             self.vector_store_available = True
-            logger.info("Vector store initialized successfully")
+            logger.info("Exact vector fallback store initialized successfully")
             
         except Exception as e:
             logger.error(f"Failed to initialize vector store: {e}")
@@ -273,14 +332,26 @@ class RagDB:
                 embeddings = self.embedding_model.encode(chunks, use_cache=False)
                 
                 with sqlite3.connect(self.db_path) as conn:
+                    native_store = self._ensure_native_vector_table(
+                        conn, int(embeddings[0].shape[0])
+                    )
                     for doc_id, embedding in zip(document_ids, embeddings):
                         # Store embedding as binary data
                         embedding_blob = embedding.astype(np.float32).tobytes()
                         
+                        conn.execute(
+                            f"DELETE FROM {self.table_name}_vectors WHERE document_id = ?",
+                            (doc_id,),
+                        )
                         conn.execute(f"""
                             INSERT INTO {self.table_name}_vectors (document_id, embedding)
                             VALUES (?, ?)
                         """, (doc_id, embedding_blob))
+                        if native_store:
+                            conn.execute(
+                                f"INSERT OR REPLACE INTO {self.vector_table_name}(rowid, embedding) VALUES (?, ?)",
+                                (doc_id, embedding.astype(np.float32)),
+                            )
                 
                 logger.debug(f"Added {len(chunks)} embeddings to vector store")
                 
@@ -386,6 +457,48 @@ class RagDB:
             
             with sqlite3.connect(self.db_path) as conn:
                 conn.row_factory = sqlite3.Row
+                native_store = self._load_sqlite_vec(conn) and conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                    (self.vector_table_name,),
+                ).fetchone()
+                if native_store:
+                    try:
+                        candidates = conn.execute(
+                            f"SELECT rowid, distance FROM {self.vector_table_name} "
+                            "WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
+                            (query_embedding.astype(np.float32), max(limit * 5, limit)),
+                        ).fetchall()
+                        ids = [int(row["rowid"]) for row in candidates]
+                        if ids:
+                            placeholders = ",".join("?" for _ in ids)
+                            rows = conn.execute(
+                                f"SELECT * FROM {self.table_name} WHERE id IN ({placeholders})",
+                                ids,
+                            ).fetchall()
+                            by_id = {int(row["id"]): row for row in rows}
+                            native_results = []
+                            for candidate in candidates:
+                                row = by_id.get(int(candidate["rowid"]))
+                                if not row:
+                                    continue
+                                if content_types and row["content_type"] not in {item.value for item in content_types}:
+                                    continue
+                                score = 1.0 - float(candidate["distance"])
+                                if score < similarity_threshold:
+                                    continue
+                                native_results.append(({
+                                    "content": row["content"],
+                                    "metadata": json.loads(row["metadata"] or "{}"),
+                                    "content_type": row["content_type"],
+                                    "source_id": row["source_id"],
+                                    "chunk_index": row["chunk_index"],
+                                }, score))
+                                if len(native_results) >= limit:
+                                    break
+                            if native_results:
+                                return native_results
+                    except sqlite3.Error as error:
+                        logger.warning("sqlite-vec query failed; using exact fallback: %s", error)
                 
                 # Build the SQL query
                 base_query = f"""
@@ -556,6 +669,23 @@ class RagDB:
         """
         try:
             with sqlite3.connect(self.db_path) as conn:
+                conn.execute("PRAGMA foreign_keys = ON")
+                self._load_sqlite_vec(conn)
+                document_ids = [
+                    row[0]
+                    for row in conn.execute(
+                        f"SELECT id FROM {self.table_name} WHERE source_id = ? AND content_type = ?",
+                        (source_id, content_type.value),
+                    )
+                ]
+                if document_ids:
+                    try:
+                        conn.executemany(
+                            f"DELETE FROM {self.vector_table_name} WHERE rowid = ?",
+                            [(document_id,) for document_id in document_ids],
+                        )
+                    except sqlite3.Error:
+                        pass
                 cursor = conn.execute(f"""
                     DELETE FROM {self.table_name}
                     WHERE source_id = ? AND content_type = ?
@@ -573,6 +703,12 @@ class RagDB:
         """Clear all data from the database."""
         try:
             with sqlite3.connect(self.db_path) as conn:
+                conn.execute("PRAGMA foreign_keys = ON")
+                self._load_sqlite_vec(conn)
+                try:
+                    conn.execute(f"DELETE FROM {self.vector_table_name}")
+                except sqlite3.Error:
+                    pass
                 conn.execute(f"DELETE FROM {self.table_name}")
                 conn.execute(f"DELETE FROM {self.table_name}_fts")
                 

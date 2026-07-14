@@ -31,6 +31,11 @@ openpyxl = "^3.1.5"
 transformers = "^4.40.0"
 torch = "^2.0.0"
 toml = "^0.10.2"
+pypdf = ">=5.0.0,<7.0.0"
+trafilatura = ">=2.0.0,<3.0.0"
+watchdog = ">=5.0.0,<7.0.0"
+sqlite-vec = ">=0.1.6,<0.2.0"
+mcp = ">=1.0.0,<2.0.0"
 
 [tool.poetry.group.test.dependencies]
 pytest = "^7.4.0"

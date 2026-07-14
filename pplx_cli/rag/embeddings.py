@@ -7,15 +7,19 @@ with quantization and caching for improved performance.
 
 import os
 import hashlib
+import json
 from typing import List, Optional, Union
 from pathlib import Path
 import numpy as np
 from sentence_transformers import SentenceTransformer
 import torch
+import requests
 from functools import lru_cache
 import logging
 
 logger = logging.getLogger(__name__)
+
+RAG_CONFIG_PATH = Path.home() / ".config" / "perplexity" / "rag_config.json"
 
 
 class EmbeddingModel:
@@ -58,6 +62,7 @@ class EmbeddingModel:
             cache_dir: Directory for model cache
         """
         self.model_name = self.MODELS.get(model_name, model_name)
+        self.provider = "local"
         self.device = device or self._get_optimal_device()
         self.quantize = quantize
         self.cache_dir = cache_dir or Path.home() / ".cache" / "pplx-cli" / "models"
@@ -221,6 +226,7 @@ class EmbeddingModel:
     def get_model_info(self) -> dict:
         """Get information about the current model."""
         return {
+            "provider": self.provider,
             "model_name": self.model_name,
             "device": self.device,
             "embedding_dim": self.embedding_dim,
@@ -244,8 +250,87 @@ class EmbeddingModel:
             logger.warning(f"Model warm-up failed: {e}")
 
 
+class PerplexityEmbeddingModel:
+    """Opt-in remote embeddings while retaining the local BGE default."""
+
+    DEFAULT_MODEL = "pplx-embed-v1"
+
+    def __init__(self, model_name: str = DEFAULT_MODEL):
+        self.model_name = model_name
+        self.provider = "perplexity"
+        self.device = "remote"
+        self.quantize = False
+        self._embedding_dim: Optional[int] = None
+
+    @property
+    def embedding_dim(self) -> int:
+        if self._embedding_dim is None:
+            raise RuntimeError("Embedding dimension is available after the first successful embedding request")
+        return self._embedding_dim
+
+    def encode(
+        self,
+        texts: Union[str, List[str]],
+        batch_size: int = 32,
+        use_cache: bool = True,
+        show_progress: bool = False,
+    ) -> Union[np.ndarray, List[np.ndarray]]:
+        from ..config import Config, Provider
+
+        is_single = isinstance(texts, str)
+        inputs = [texts] if is_single else list(texts)
+        api_key = Config.get_instance().get_api_key(Provider.PERPLEXITY)
+        if not api_key:
+            raise ValueError("Perplexity embeddings require PERPLEXITY_API_KEY or `perplexity setup --provider perplexity`")
+        response = requests.post(
+            "https://api.perplexity.ai/v1/embeddings",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={"model": self.model_name, "input": inputs},
+            timeout=Config.get_instance().timeout,
+        )
+        if response.status_code != 200:
+            raise RuntimeError(f"Perplexity embeddings request failed: {response.status_code} - {response.text}")
+        try:
+            ordered = sorted(response.json()["data"], key=lambda item: item["index"])
+            vectors = np.asarray([item["embedding"] for item in ordered], dtype=np.float32)
+        except (KeyError, TypeError, ValueError) as error:
+            raise RuntimeError("Unexpected Perplexity embeddings response") from error
+        self._embedding_dim = int(vectors.shape[-1])
+        return vectors[0] if is_single else vectors
+
+    def similarity(self, embedding1: np.ndarray, embedding2: np.ndarray) -> float:
+        denominator = np.linalg.norm(embedding1) * np.linalg.norm(embedding2)
+        return float(np.dot(embedding1, embedding2) / denominator) if denominator else 0.0
+
+    def get_model_info(self) -> dict:
+        return {
+            "provider": self.provider,
+            "model_name": self.model_name,
+            "device": self.device,
+            "embedding_dim": self._embedding_dim,
+            "quantized": False,
+            "cache_size": 0,
+            "max_sequence_length": None,
+        }
+
+    def clear_cache(self):
+        return None
+
+    def warm_up(self):
+        self.encode("Warm up embedding model", use_cache=False)
+
+
 # Singleton instance for global access
 _default_model: Optional[EmbeddingModel] = None
+
+
+def _load_rag_config() -> dict:
+    try:
+        with open(RAG_CONFIG_PATH, encoding="utf-8") as config_file:
+            data = json.load(config_file)
+            return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
 
 
 def get_embedding_model(
@@ -265,7 +350,17 @@ def get_embedding_model(
     global _default_model
     
     if _default_model is None:
-        _default_model = EmbeddingModel(model_name, **kwargs)
+        config = _load_rag_config()
+        provider = kwargs.pop("provider", config.get("embedding_provider", "local"))
+        configured_model = config.get("model") if model_name == EmbeddingModel.DEFAULT_MODEL else None
+        configured_device = config.get("device") if "device" not in kwargs else None
+        if configured_device:
+            kwargs["device"] = configured_device
+        selected_model = configured_model or model_name
+        if provider == "perplexity":
+            _default_model = PerplexityEmbeddingModel(selected_model)
+        else:
+            _default_model = EmbeddingModel(selected_model, **kwargs)
     
     return _default_model
 
