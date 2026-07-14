@@ -1,13 +1,20 @@
 import typer
-from typing import Optional
+from typing import List, Optional, Union
 import getpass
 import sys
 import platform
 import json
-from .api import query_perplexity
-from .config import PerplexityModel, Config, save_api_key, load_api_key, get_version
+from .api import query_chat
+from .config import (
+    Config,
+    PerplexityModel,
+    Provider,
+    get_provider_settings,
+    get_version,
+    normalize_provider,
+    save_api_key,
+)
 from pathlib import Path
-from typing import Optional, List
 from .notes import NotesDB
 from .chat_history import ChatHistoryDB
 
@@ -53,6 +60,28 @@ def get_model_from_name(name: str) -> Optional[PerplexityModel]:
     if model is None:
         raise typer.BadParameter(f"Model must be one of: small, large, huge")
     return model
+
+
+def get_provider_from_name(name: Optional[str]) -> Provider:
+    """Resolve an explicit provider or use the configured default."""
+    if name is None:
+        return Config.get_instance().provider
+
+    try:
+        return normalize_provider(name)
+    except ValueError as error:
+        raise typer.BadParameter(str(error), param_hint="--provider") from error
+
+
+def get_model_for_provider(
+    name: Optional[str], provider: Provider
+) -> Optional[Union[PerplexityModel, str]]:
+    """Keep Perplexity aliases while passing other providers' native IDs through."""
+    if name is None:
+        return None
+    if provider == Provider.PERPLEXITY:
+        return get_model_from_name(name)
+    return name
 
 def get_masked_input(prompt: str = "Enter password: ") -> str:
     """Get password input with asterisk masking.
@@ -101,59 +130,97 @@ def get_masked_input(prompt: str = "Enter password: ") -> str:
     return ''.join(password)
 
 @app.command()
-def setup():
-    """Configure your Perplexity API key."""
+def setup(
+    provider: Optional[str] = typer.Option(
+        None,
+        "--provider",
+        help="Provider to configure: perplexity, nvidia, or openrouter",
+    )
+):
+    """Configure a default provider and its API key."""
     try:
-        api_key = get_masked_input("Please enter your Perplexity API key: ")
+        if provider is None:
+            default_provider = Config.get_instance().provider.value
+            provider = typer.prompt(
+                "Choose provider (perplexity, nvidia, openrouter)",
+                default=default_provider,
+            )
+
+        selected_provider = get_provider_from_name(provider)
+        settings = get_provider_settings(selected_provider)
+        api_key = get_masked_input(
+            f"Please enter your {settings.display_name} API key: "
+        )
         
         if not api_key:
             typer.echo("API key cannot be empty", err=True)
             raise typer.Exit(code=1)
         
-        save_api_key(api_key)
-        typer.echo("\n✨ API key saved successfully! ✨", color=typer.colors.GREEN)
-        typer.echo("You can now use the Perplexity CLI to ask questions.\n")
+        save_api_key(api_key, selected_provider)
+        Config.get_instance().reload()
+        typer.echo(
+            f"\n✨ {settings.display_name} API key saved successfully! ✨",
+            color=typer.colors.GREEN,
+        )
+        typer.echo(
+            f"You can now ask questions with {settings.display_name}.\n"
+        )
     except KeyboardInterrupt:
         typer.echo("\nSetup cancelled.", err=True)
         raise typer.Exit(code=1)
 
-def ensure_api_key():
-    """Check if API key is configured and prompt for it if not."""
+def ensure_api_key(provider: Provider) -> None:
+    """Check that the selected provider has a key without prompting in scripts."""
     config = Config.get_instance()
-    if not config.api_key:
-        typer.echo("No API key found. Please set up your API key first.")
-        setup()
-        # Reload the configuration after setup
-        config.api_key = load_api_key()
-        if not config.api_key:
-            typer.echo("Failed to save API key", err=True)
-            raise typer.Exit(code=1)
+    if not config.get_api_key(provider):
+        settings = get_provider_settings(provider)
+        typer.echo(
+            f"No {settings.display_name} API key found. Set "
+            f"{settings.environment_variable} or run "
+            f"'perplexity setup --provider {provider.value}'.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
 @app.command()
 def ask(
-    query: str = typer.Argument(..., help="The question to ask Perplexity AI"),
+    query: str = typer.Argument(..., help="The question to ask the selected AI provider"),
     topic: str = typer.Option(None, "--topic", help="Topic for the conversation"),
+    provider: Optional[str] = typer.Option(
+        None,
+        "--provider",
+        help="Provider override: perplexity, nvidia, or openrouter",
+    ),
     model: str = typer.Option(
         None,
         "--model",
-        help="Model to use for the query (small, large, huge)",
+        help="Perplexity alias (small, large, huge) or a native NVIDIA/OpenRouter model ID",
         case_sensitive=False
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose output"),
     save_history: bool = typer.Option(True, "--save-history/--no-save-history", help="Save the conversation to history")
 ):
-    """Ask a question to Perplexity AI and get a response."""
+    """Ask a question to the configured AI provider and get a response."""
     try:
-        ensure_api_key()
-        
-        selected_model = get_model_from_name(model) if model else None
-        
+        selected_provider = get_provider_from_name(provider)
+        settings = get_provider_settings(selected_provider)
+        ensure_api_key(selected_provider)
+        selected_model = get_model_for_provider(model, selected_provider)
+        model_name = (
+            selected_model.value
+            if isinstance(selected_model, PerplexityModel)
+            else selected_model or Config.get_instance().get_default_model(selected_provider)
+        )
+
         if verbose:
-            typer.echo(f"Using model: {selected_model.value if selected_model else Config.get_instance().model.value}")
-        
-        typer.echo("Querying Perplexity AI...")
-        response = query_perplexity(query, selected_model)
-        
+            typer.echo(f"Using provider: {settings.display_name}")
+            typer.echo(f"Using model: {model_name}")
+
+        typer.echo(f"Querying {settings.display_name}...")
+        response = query_chat(
+            query, model=selected_model, provider=selected_provider
+        )
+
         # Save to chat history if enabled
         if save_history:
             db = ChatHistoryDB()
@@ -167,10 +234,27 @@ def ask(
         raise typer.Exit(code=1)
 
 @app.command(name="list-models")
-def list_models():
-    """List all available Perplexity AI models."""
-    for model in PerplexityModel:
-        typer.echo(f"{model.name.lower()}: {model.value}")
+def list_models(
+    provider: Optional[str] = typer.Option(
+        None,
+        "--provider",
+        help="Provider to describe: perplexity, nvidia, or openrouter",
+    )
+):
+    """List Perplexity aliases or describe native model selection."""
+    selected_provider = get_provider_from_name(provider)
+    settings = get_provider_settings(selected_provider)
+
+    if selected_provider == Provider.PERPLEXITY:
+        for model in PerplexityModel:
+            typer.echo(f"{model.name.lower()}: {model.value}")
+        return
+
+    typer.echo(f"Default {settings.display_name} model: {settings.default_model}")
+    typer.echo(
+        "Pass any supported native model ID with "
+        f"'perplexity ask --provider {selected_provider.value} --model <model-id> <query>'."
+    )
 
 @app.command()
 def version():
@@ -256,6 +340,16 @@ def view_note(
 def ask_notes(
     query: str = typer.Argument(..., help="The question to ask about your notes"),
     top_k: int = typer.Option(3, "--top", help="Number of most relevant notes to consider"),
+    provider: Optional[str] = typer.Option(
+        None,
+        "--provider",
+        help="Provider override: perplexity, nvidia, or openrouter",
+    ),
+    model: Optional[str] = typer.Option(
+        None,
+        "--model",
+        help="Perplexity alias (small, large, huge) or a native NVIDIA/OpenRouter model ID",
+    ),
     directory: Optional[Path] = typer.Option(
         None, "--dir",
         help="Directory to read notes from (default: ~/.local/share/perplexity/notes)"
@@ -287,9 +381,14 @@ Relevant Notes:
 
 Please provide a comprehensive answer based solely on the information in these notes."""
     
-    # Get response from Perplexity AI
+    # Get a response from the selected chat provider.
     try:
-        response = query_perplexity(prompt)
+        selected_provider = get_provider_from_name(provider)
+        ensure_api_key(selected_provider)
+        selected_model = get_model_for_provider(model, selected_provider)
+        response = query_chat(
+            prompt, model=selected_model, provider=selected_provider
+        )
         
         # Print the response with relevant note references
         typer.echo("\n🤖 Answer based on your notes:")

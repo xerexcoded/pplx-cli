@@ -1,6 +1,6 @@
 # Perplexity CLI
 
-A powerful command-line interface for Perplexity AI with **ultra-fast RAG (Retrieval Augmented Generation)** capabilities. Search through all your notes and chat history in milliseconds using cutting-edge vector search technology.
+A powerful command-line interface for Perplexity, NVIDIA NIM, and OpenRouter with **ultra-fast RAG (Retrieval Augmented Generation)** capabilities. Search through all your notes and chat history in milliseconds using cutting-edge vector search technology.
 
 ## 🚀 Key Features
 
@@ -8,7 +8,7 @@ A powerful command-line interface for Perplexity AI with **ultra-fast RAG (Retri
 - 🧠 **Intelligent Hybrid Search**: Combines vector similarity and keyword search with Reciprocal Rank Fusion
 - 📚 **Unified Knowledge Base**: Search notes and chat history together in a single, powerful interface
 - 🔄 **Seamless Migration**: Automatically migrate your existing data to the new RAG system
-- 🤖 **Direct Perplexity AI Integration**: Chat with multiple AI models (Sonar, Reasoning, Deep Research)
+- 🤖 **Multi-Provider AI Chat**: Use Perplexity Sonar, NVIDIA NIM, or OpenRouter models with one CLI
 - 📝 **Advanced Note Management**: Local storage with AI-powered semantic search
 - 💬 **Complete Chat History**: Track, analyze, and export all conversations
 - 📊 **Rich Analytics**: Detailed statistics and insights about your usage
@@ -37,10 +37,12 @@ pip install -e .
 
 ## Quick Start
 
-1. **Set up your API key:**
+1. **Choose and set up your default AI provider:**
 ```bash
 perplexity setup
 ```
+
+The setup prompt lets you choose `perplexity`, `nvidia`, or `openrouter` and securely saves that provider's key as the default.
 
 2. **Migrate your existing data to RAG (recommended):**
 ```bash
@@ -232,19 +234,49 @@ Seed a sample vault and launch the graph:
 
 ### Direct AI Chat
 
-Ask Perplexity AI directly:
+Ask your configured provider directly:
 ```bash
 perplexity ask "What is the capital of France?"
 
-# With specific models
+# Configure a provider non-interactively
+perplexity setup --provider nvidia
+perplexity setup --provider openrouter
+
+# Override the saved provider for one request
+perplexity ask --provider nvidia "Explain retrieval augmented generation"
+perplexity ask --provider openrouter "Summarize the CAP theorem"
+
+# Perplexity aliases
 perplexity ask "Complex reasoning question" --model large
 perplexity ask "Quick search query" --model small
+
+# NVIDIA NIM and OpenRouter accept provider-native model IDs
+perplexity ask --provider nvidia --model meta/llama-3.3-70b-instruct "Write a haiku"
+perplexity ask --provider openrouter --model openrouter/free "Explain recursion"
 
 # With conversation topics
 perplexity ask "Explain quantum computing" --topic physics
 ```
 
-**Available Models:**
+### Provider configuration
+
+Environment variables override keys saved by `perplexity setup`, which is useful for CI and shell-specific credentials:
+
+```bash
+export PERPLEXITY_API_KEY="..."
+export NVIDIA_API_KEY="..."
+export OPENROUTER_API_KEY="..."
+```
+
+| Provider | Default model | `--model` behavior |
+|----------|---------------|--------------------|
+| Perplexity | `sonar` | Use `small`, `large`, or `huge` aliases |
+| NVIDIA NIM | `meta/llama-3.3-70b-instruct` | Pass any supported NVIDIA NIM model ID |
+| OpenRouter | `openrouter/free` | Pass any supported OpenRouter model slug |
+
+Run `perplexity list-models --provider <provider>` to see Perplexity aliases or the native-model usage for NVIDIA NIM and OpenRouter.
+
+**Perplexity aliases:**
 - `small`: Lightweight, fast responses (maps to sonar)
 - `large`: Deep reasoning and analysis (maps to sonar-reasoning)
 - `huge`: Comprehensive research reports (maps to sonar-deep-research)
@@ -301,6 +333,9 @@ perplexity view-note <note-id>
 
 # Search notes (legacy - use RAG instead!)
 perplexity ask-notes "What did I write about machine learning?"
+
+# Use another provider for the generated answer
+perplexity ask-notes --provider openrouter --model openrouter/free "What did I write about machine learning?"
 ```
 
 ## 🎯 Command Reference
