@@ -45,6 +45,10 @@ def test_query_chat_uses_provider_endpoint_headers_and_model(
     assert response == f"{provider.value} response"
     request = requests_mock.last_request
     assert request.headers["Authorization"] == f"Bearer {provider.value}-key"
+    expected_integration = (
+        "xerexcoded-pplx-cli" if provider == Provider.PERPLEXITY else None
+    )
+    assert request.headers.get("X-Pplx-Integration") == expected_integration
     assert request.json() == {
         "model": model.value if isinstance(model, PerplexityModel) else model,
         "messages": [{"role": "user", "content": "test question"}],
