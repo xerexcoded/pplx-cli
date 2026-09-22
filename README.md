@@ -1,3 +1,5 @@
+
+
 # Perplexity CLI
 
 A command-line interface for Perplexity, NVIDIA NIM, and OpenRouter with local notes, evidence-first RAG, and a Markdown-compatible LLM Wiki. Search notes, chat history, and curated research sources without giving up source provenance.
@@ -481,7 +483,7 @@ git clone https://github.com/xerexcoded/pplx-cli.git
 cd pplx-cli
 
 # Using Poetry (recommended)
-poetry install
+poetry install --with test
 poetry run pytest  # Run tests
 poetry run perplexity --help  # Test CLI
 
