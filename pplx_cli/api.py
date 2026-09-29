@@ -50,12 +50,16 @@ def query_chat_completion(
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": prompt})
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    if selected_provider == Provider.PERPLEXITY:
+        headers["X-Pplx-Integration"] = "xerexcoded-pplx-cli"
+
     response = requests.post(
         config.get_api_endpoint(selected_provider),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
+        headers=headers,
         json={"model": selected_model, "messages": messages},
         timeout=config.timeout,
     )
