@@ -478,6 +478,7 @@ class RagDB:
                                 (query_embedding.astype(np.float32), candidate_limit),
                             ).fetchall()
                             ids = [int(row["rowid"]) for row in candidates]
+                            native_results = []
                             if ids:
                                 placeholders = ",".join("?" for _ in ids)
                                 rows = conn.execute(
@@ -485,7 +486,6 @@ class RagDB:
                                     ids,
                                 ).fetchall()
                                 by_id = {int(row["id"]): row for row in rows}
-                                native_results = []
                                 allowed_types = {item.value for item in content_types or []}
                                 for candidate in candidates:
                                     row = by_id.get(int(candidate["rowid"]))
@@ -507,6 +507,8 @@ class RagDB:
                                         return native_results
 
                             if len(candidates) < candidate_limit:
+                                if native_results:
+                                    return native_results
                                 break
                             candidate_limit *= 2
                     except sqlite3.Error as error:
