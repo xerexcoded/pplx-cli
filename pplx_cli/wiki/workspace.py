@@ -869,9 +869,27 @@ class WikiWorkspace:
             )
         return start, end
 
+    @staticmethod
+    def _read_managed_page(path: Path) -> str:
+        """Read a managed page strictly so invalid bytes can never be rewritten lossily."""
+        try:
+            return path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as error:
+            raise ValueError(
+                f"Refusing to overwrite {path}: it is not valid UTF-8. "
+                "Repair or move the file before compiling."
+            ) from error
+
+    def _escape_generated_markers(self, generated: str) -> str:
+        """Keep generated text from introducing extra section boundaries."""
+        for marker in (self.GENERATED_START, self.GENERATED_END):
+            generated = generated.replace(marker, marker.replace("<", "&lt;"))
+        return generated
+
     def _render_managed_page(self, path: Path, generated: str) -> None:
+        generated = self._escape_generated_markers(generated)
         if path.exists():
-            existing = path.read_text(encoding="utf-8", errors="replace")
+            existing = self._read_managed_page(path)
             start, end = self._managed_section_bounds(existing, path)
             updated = (
                 existing[: start + len(self.GENERATED_START)]
@@ -905,10 +923,22 @@ class WikiWorkspace:
         rows = self._source_rows()
         if not rows:
             raise ValueError("No sources are indexed. Run wiki ingest or wiki sync first.")
+        source_page_paths = [
+            self.wiki_dir / "sources" / f"source-{row['id']}-{self._safe_slug(row['title'])}.md"
+            for row in rows
+        ]
+        page_paths = source_page_paths + [self.wiki_dir / "overview.md"]
+        # Validate every target before making writer calls. Dry runs should not
+        # claim success for a page that a real compile would reject.
+        for path in page_paths:
+            if path.exists():
+                existing = self._read_managed_page(path)
+                self._managed_section_bounds(existing, path)
+
         generated_pages: List[Tuple[Path, str]] = []
         source_links = []
         overview_evidence = []
-        for row in rows:
+        for row, page_path in zip(rows, source_page_paths):
             with self._connect() as conn:
                 chunks = conn.execute(
                     "SELECT content, heading, locator FROM wiki_chunks WHERE source_id = ? ORDER BY chunk_index LIMIT 8",
@@ -927,8 +957,7 @@ class WikiWorkspace:
                 f"Title: {row['title']}\nSource text:\n{source_text}"
             )
             completion = query_chat_completion(prompt, provider=provider, model=model)
-            page_name = f"source-{row['id']}-{self._safe_slug(row['title'])}.md"
-            page_path = self.wiki_dir / "sources" / page_name
+            page_name = page_path.name
             generated = (
                 f"# {row['title']}\n\n{completion.content.strip()}\n\n"
                 f"## Source\n\n{self._source_footnote(row)}"
@@ -956,12 +985,6 @@ class WikiWorkspace:
             )
         )
         if not dry_run:
-            # Validate every existing target before changing any of them, so a
-            # damaged or user-owned page cannot cause a partially updated wiki.
-            for path, _ in generated_pages:
-                if path.exists():
-                    existing = path.read_text(encoding="utf-8", errors="replace")
-                    self._managed_section_bounds(existing, path)
             for path, generated in generated_pages:
                 self._render_managed_page(path, generated)
         return [path for path, _ in generated_pages]
