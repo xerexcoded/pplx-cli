@@ -206,6 +206,7 @@ def test_native_vector_search_expands_candidates_for_content_filter(
         key=lambda row: row["distance"],
     )
     candidate_limits = []
+    exact_query_calls = []
     connect = sqlite3.connect
 
     class Cursor:
@@ -245,6 +246,8 @@ def test_native_vector_search_expands_candidates_for_content_filter(
                 if fail_native_query:
                     raise sqlite3.OperationalError("native query failed")
                 return Cursor(candidate_rows[:candidate_limit])
+            if f"JOIN {rag_db.table_name}_vectors" in sql:
+                exact_query_calls.append(sql)
             return self.connection.execute(sql, params)
 
     monkeypatch.setattr(rag_db, "_load_sqlite_vec", lambda conn: True)
@@ -259,6 +262,7 @@ def test_native_vector_search_expands_candidates_for_content_filter(
     )
 
     assert candidate_limits == expected_limits
+    assert len(exact_query_calls) == int(fail_native_query)
     assert [result[0]["source_id"] for result in native_results] == expected_source_ids
 
     monkeypatch.setattr(rag_db, "_load_sqlite_vec", lambda conn: False)
