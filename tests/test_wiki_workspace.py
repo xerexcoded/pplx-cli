@@ -216,6 +216,33 @@ def test_compile_preflights_all_pages_before_refreshing_any(
     assert completion_calls == []
 
 
+def test_compile_refuses_to_replace_damaged_source_page(
+    workspace, tmp_path, monkeypatch
+):
+    (tmp_path / "source.md").write_text("# Source\n\nVector evidence.", encoding="utf-8")
+    workspace.sync()
+    monkeypatch.setattr(
+        "pplx_cli.wiki.workspace.query_chat_completion",
+        lambda *args, **kwargs: ChatCompletion(content="Initial summary.", model="fake"),
+    )
+    source_page, overview = workspace.compile()
+    damaged_page = "# Manual source notes\n\n<!-- pplx:generated:end -->\n"
+    source_page.write_text(damaged_page, encoding="utf-8")
+    completion_calls = []
+    monkeypatch.setattr(
+        "pplx_cli.wiki.workspace.query_chat_completion",
+        lambda *args, **kwargs: completion_calls.append(True)
+        or ChatCompletion(content="Refreshed summary.", model="fake"),
+    )
+
+    with pytest.raises(ValueError, match="Refusing to overwrite"):
+        workspace.compile()
+
+    assert source_page.read_text(encoding="utf-8") == damaged_page
+    assert overview.exists()
+    assert completion_calls == []
+
+
 def test_compile_escapes_marker_text_in_generated_source_and_summary(
     workspace, tmp_path, monkeypatch
 ):

@@ -14,6 +14,7 @@ from pplx_cli.config import (
     load_default_provider,
     save_api_key,
 )
+from pplx_cli.notes import NotesDB
 
 
 def response_json(content="Mocked response"):
@@ -239,30 +240,7 @@ def test_version_flag(runner):
 def test_note_commands_create_list_view_and_report_missing(
     runner, mock_config, monkeypatch
 ):
-    note_data = {
-        "id": 7,
-        "title": "Research",
-        "content": "Evidence goes here.",
-        "tags": '["work"]',
-        "created_at": "2026-10-17T10:00:00",
-        "updated_at": "2026-10-17T10:00:00",
-    }
-
-    class FakeNotesDB:
-        def __init__(self, directory):
-            self.directory = directory
-
-        def add_note(self, title, content, tags):
-            assert (title, content, tags) == ("Research", "Evidence goes here.", ["work"])
-            return 7
-
-        def list_notes(self, tag=None):
-            return [note_data] if tag in (None, "work") else []
-
-        def get_note(self, note_id):
-            return note_data if note_id == 7 else None
-
-    monkeypatch.setattr("pplx_cli.cli.NotesDB", FakeNotesDB)
+    monkeypatch.setattr(NotesDB, "_generate_embedding", lambda self, text: b"")
     directory = str(mock_config)
     created = runner.invoke(
         app,
@@ -279,13 +257,14 @@ def test_note_commands_create_list_view_and_report_missing(
         ],
     )
     listed = runner.invoke(app, ["list-notes", "--tag", "work", "--dir", directory])
-    viewed = runner.invoke(app, ["view-note", "7", "--dir", directory])
+    viewed = runner.invoke(app, ["view-note", "1", "--dir", directory])
     missing = runner.invoke(app, ["view-note", "99", "--dir", directory])
     empty = runner.invoke(app, ["list-notes", "--tag", "missing", "--dir", directory])
 
     assert created.exit_code == 0
-    assert "ID: 7" in created.stdout
+    assert "ID: 1" in created.stdout
     assert listed.exit_code == 0 and "Research" in listed.stdout
+    assert "Research" not in empty.stdout
     assert viewed.exit_code == 0 and "Evidence goes here." in viewed.stdout
     assert missing.exit_code == 1 and "not found" in missing.stdout
     assert empty.exit_code == 0 and "No notes found" in empty.stdout
