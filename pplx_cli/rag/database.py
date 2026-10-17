@@ -447,6 +447,9 @@ class RagDB:
         Returns:
             List of (document, similarity_score) tuples
         """
+        if limit <= 0:
+            return []
+
         if not self.vector_store_available:
             logger.warning("Vector store not available, falling back to keyword search")
             return self.keyword_search(query, content_types, limit)
@@ -463,40 +466,49 @@ class RagDB:
                 ).fetchone()
                 if native_store:
                     try:
-                        candidates = conn.execute(
-                            f"SELECT rowid, distance FROM {self.vector_table_name} "
-                            "WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
-                            (query_embedding.astype(np.float32), max(limit * 5, limit)),
-                        ).fetchall()
-                        ids = [int(row["rowid"]) for row in candidates]
-                        if ids:
-                            placeholders = ",".join("?" for _ in ids)
-                            rows = conn.execute(
-                                f"SELECT * FROM {self.table_name} WHERE id IN ({placeholders})",
-                                ids,
+                        # sqlite-vec ranks before these document-table filters run. A
+                        # fixed candidate window can therefore discard valid matches
+                        # just outside the window and return fewer than `limit` rows.
+                        # Widen the KNN window until it fills or the index is exhausted.
+                        candidate_limit = max(limit * 5, limit)
+                        while True:
+                            candidates = conn.execute(
+                                f"SELECT rowid, distance FROM {self.vector_table_name} "
+                                "WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
+                                (query_embedding.astype(np.float32), candidate_limit),
                             ).fetchall()
-                            by_id = {int(row["id"]): row for row in rows}
-                            native_results = []
-                            for candidate in candidates:
-                                row = by_id.get(int(candidate["rowid"]))
-                                if not row:
-                                    continue
-                                if content_types and row["content_type"] not in {item.value for item in content_types}:
-                                    continue
-                                score = 1.0 - float(candidate["distance"])
-                                if score < similarity_threshold:
-                                    continue
-                                native_results.append(({
-                                    "content": row["content"],
-                                    "metadata": json.loads(row["metadata"] or "{}"),
-                                    "content_type": row["content_type"],
-                                    "source_id": row["source_id"],
-                                    "chunk_index": row["chunk_index"],
-                                }, score))
-                                if len(native_results) >= limit:
-                                    break
-                            if native_results:
-                                return native_results
+                            ids = [int(row["rowid"]) for row in candidates]
+                            if ids:
+                                placeholders = ",".join("?" for _ in ids)
+                                rows = conn.execute(
+                                    f"SELECT * FROM {self.table_name} WHERE id IN ({placeholders})",
+                                    ids,
+                                ).fetchall()
+                                by_id = {int(row["id"]): row for row in rows}
+                                native_results = []
+                                allowed_types = {item.value for item in content_types or []}
+                                for candidate in candidates:
+                                    row = by_id.get(int(candidate["rowid"]))
+                                    if not row:
+                                        continue
+                                    if allowed_types and row["content_type"] not in allowed_types:
+                                        continue
+                                    score = 1.0 - float(candidate["distance"])
+                                    if score < similarity_threshold:
+                                        continue
+                                    native_results.append(({
+                                        "content": row["content"],
+                                        "metadata": json.loads(row["metadata"] or "{}"),
+                                        "content_type": row["content_type"],
+                                        "source_id": row["source_id"],
+                                        "chunk_index": row["chunk_index"],
+                                    }, score))
+                                    if len(native_results) >= limit:
+                                        return native_results
+
+                            if len(candidates) < candidate_limit:
+                                break
+                            candidate_limit *= 2
                     except sqlite3.Error as error:
                         logger.warning("sqlite-vec query failed; using exact fallback: %s", error)
                 
