@@ -146,6 +146,69 @@ def test_compile_preserves_manual_content_and_lint_detects_staleness(workspace, 
     assert workspace.lint()["warnings"]
 
 
+@pytest.mark.parametrize(
+    "damaged_page",
+    [
+        "# User-owned overview\nManual research notes.\n",
+        "<!-- pplx:generated:start -->\nGenerated text without an end marker.\n",
+        "<!-- pplx:generated:end -->\n<!-- pplx:generated:start -->\nOut of order.\n",
+        (
+            "<!-- pplx:generated:start -->\nFirst section.\n"
+            "<!-- pplx:generated:start -->\nDuplicate start.\n"
+            "<!-- pplx:generated:end -->\n"
+        ),
+    ],
+)
+def test_compile_refuses_to_replace_unowned_or_damaged_pages(
+    workspace, tmp_path, monkeypatch, damaged_page
+):
+    (tmp_path / "source.md").write_text("# Source\n\nVector evidence.", encoding="utf-8")
+    workspace.sync()
+    monkeypatch.setattr(
+        "pplx_cli.wiki.workspace.query_chat_completion",
+        lambda *args, **kwargs: ChatCompletion(content="A cited summary.", model="fake"),
+    )
+    overview = workspace.wiki_dir / "overview.md"
+    overview.write_text(damaged_page, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Refusing to overwrite"):
+        workspace.compile()
+
+    assert overview.read_text(encoding="utf-8") == damaged_page
+    assert not list((workspace.wiki_dir / "sources").glob("*.md"))
+
+
+def test_compile_preflights_all_pages_before_refreshing_any(
+    workspace, tmp_path, monkeypatch
+):
+    (tmp_path / "source.md").write_text("# Source\n\nVector evidence.", encoding="utf-8")
+    workspace.sync()
+    completions = iter(
+        [
+            ChatCompletion(content="Initial source summary.", model="fake"),
+            ChatCompletion(content="Initial overview.", model="fake"),
+        ]
+    )
+    monkeypatch.setattr(
+        "pplx_cli.wiki.workspace.query_chat_completion",
+        lambda *args, **kwargs: next(completions),
+    )
+    source_page, overview = workspace.compile()
+    original_source_page = source_page.read_text(encoding="utf-8")
+    damaged_overview = "# Keep this text\n\n<!-- pplx:generated:end -->\n"
+    overview.write_text(damaged_overview, encoding="utf-8")
+    monkeypatch.setattr(
+        "pplx_cli.wiki.workspace.query_chat_completion",
+        lambda *args, **kwargs: ChatCompletion(content="Refreshed summary.", model="fake"),
+    )
+
+    with pytest.raises(ValueError, match="Refusing to overwrite"):
+        workspace.compile()
+
+    assert source_page.read_text(encoding="utf-8") == original_source_page
+    assert overview.read_text(encoding="utf-8") == damaged_overview
+
+
 def test_query_uses_raw_source_evidence_and_keeps_web_response_distinct(workspace, tmp_path, monkeypatch):
     (tmp_path / "source.md").write_text("# Source\n\nVector evidence is local.", encoding="utf-8")
     workspace.sync()

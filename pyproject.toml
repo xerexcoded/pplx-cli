@@ -40,6 +40,7 @@ mcp = ">=1.0.0,<2.0.0"
 [tool.poetry.group.test.dependencies]
 pytest = "^7.4.0"
 requests-mock = "^1.11.0"
+coverage = "^7.16.2"
 
 [build-system]
 requires = ["poetry-core"]
@@ -47,3 +48,13 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.scripts]
 perplexity = "pplx_cli.cli:app"
+
+[tool.coverage.run]
+source = ["pplx_cli"]
+relative_files = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+precision = 1
+fail_under = 70.0

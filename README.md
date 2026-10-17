@@ -499,6 +499,10 @@ poetry run perplexity rag "test query" --explain
 
 # Run full test suite
 poetry run pytest -v
+
+# Measure project-wide test coverage
+poetry run coverage run -m pytest
+poetry run coverage report -m
 ```
 
 ### Architecture

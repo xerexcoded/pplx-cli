@@ -153,6 +153,137 @@ def test_content_type_filter(rag_db, mock_embedding_model):
     assert results[0][0]["content_type"] == "note"
 
 
+@pytest.mark.parametrize(
+    "similarity_threshold, fail_native_query, expected_source_ids, expected_limits",
+    [
+        (0.0, False, [101, 102], [10, 20]),
+        (0.75, False, [101], [10, 20]),
+        (0.0, True, [101, 102], [10]),
+    ],
+)
+def test_native_vector_search_expands_candidates_for_content_filter(
+    rag_db,
+    mock_embedding_model,
+    monkeypatch,
+    similarity_threshold,
+    fail_native_query,
+    expected_source_ids,
+    expected_limits,
+):
+    import sqlite3
+
+    query_embedding = np.array([1.0, 0.0], dtype=np.float32)
+    vectors = {}
+    documents = []
+
+    def encode(texts, **kwargs):
+        if isinstance(texts, str):
+            return query_embedding
+        return np.vstack([vectors[text] for text in texts])
+
+    mock_embedding_model.encode.side_effect = encode
+    items = [
+        (ContentType.CHAT_MESSAGE, index + 1, index * 0.03)
+        for index in range(10)
+    ] + [
+        (ContentType.NOTE, 101, 0.5),
+        (ContentType.NOTE, 102, 0.8),
+    ]
+    for content_type, source_id, angle in items:
+        content = f"document {source_id}"
+        vectors[content] = np.array([np.cos(angle), np.sin(angle)], dtype=np.float32)
+        document_id = rag_db.add_document(content, content_type, source_id)[0]
+        documents.append((document_id, vectors[content]))
+
+    candidate_rows = sorted(
+        [
+            {
+                "rowid": document_id,
+                "distance": 1.0 - float(np.dot(query_embedding, vector)),
+            }
+            for document_id, vector in documents
+        ],
+        key=lambda row: row["distance"],
+    )
+    candidate_limits = []
+    connect = sqlite3.connect
+
+    class Cursor:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def fetchone(self):
+            return self.rows[0] if self.rows else None
+
+        def fetchall(self):
+            return self.rows
+
+    class NativeCandidateConnection:
+        def __init__(self, path):
+            self.connection = connect(path)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            self.connection.close()
+
+        @property
+        def row_factory(self):
+            return self.connection.row_factory
+
+        @row_factory.setter
+        def row_factory(self, value):
+            self.connection.row_factory = value
+
+        def execute(self, sql, params=()):
+            if "FROM sqlite_master" in sql:
+                return Cursor([(1,)])
+            if "embedding MATCH ?" in sql:
+                candidate_limit = params[-1]
+                candidate_limits.append(candidate_limit)
+                if fail_native_query:
+                    raise sqlite3.OperationalError("native query failed")
+                return Cursor(candidate_rows[:candidate_limit])
+            return self.connection.execute(sql, params)
+
+    monkeypatch.setattr(rag_db, "_load_sqlite_vec", lambda conn: True)
+    monkeypatch.setattr(
+        "pplx_cli.rag.database.sqlite3.connect", NativeCandidateConnection
+    )
+    native_results = rag_db.vector_search(
+        "query",
+        content_types=[ContentType.NOTE],
+        limit=2,
+        similarity_threshold=similarity_threshold,
+    )
+
+    assert candidate_limits == expected_limits
+    assert [result[0]["source_id"] for result in native_results] == expected_source_ids
+
+    monkeypatch.setattr(rag_db, "_load_sqlite_vec", lambda conn: False)
+    exact_results = rag_db.vector_search(
+        "query",
+        content_types=[ContentType.NOTE],
+        limit=2,
+        similarity_threshold=similarity_threshold,
+    )
+    assert [result[0]["source_id"] for result in native_results] == [
+        result[0]["source_id"] for result in exact_results
+    ]
+    assert [result[1] for result in native_results] == pytest.approx(
+        [result[1] for result in exact_results]
+    )
+
+
+def test_vector_search_non_positive_limit_skips_embedding(rag_db, mock_embedding_model):
+    mock_embedding_model.encode.side_effect = AssertionError("must not encode")
+
+    assert rag_db.vector_search("query", limit=0) == []
+    assert rag_db.vector_search("query", limit=-1) == []
+    mock_embedding_model.encode.assert_not_called()
+
+
 def test_document_chunk_class():
     chunk = DocumentChunk(
         content="Test",
