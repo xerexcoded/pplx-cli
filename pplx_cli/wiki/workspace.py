@@ -853,21 +853,35 @@ class WikiWorkspace:
             f"indexed={row['updated_at']}"
         )
 
+    def _managed_section_bounds(self, existing: str, path: Path) -> Tuple[int, int]:
+        """Return the intact generated-section boundaries or refuse destructive writes."""
+        if existing.count(self.GENERATED_START) != 1 or existing.count(self.GENERATED_END) != 1:
+            raise ValueError(
+                f"Refusing to overwrite {path}: its generated-section markers are missing or duplicated. "
+                "Restore one matching marker pair or move the file before compiling."
+            )
+        start = existing.find(self.GENERATED_START)
+        end = existing.find(self.GENERATED_END)
+        if end <= start:
+            raise ValueError(
+                f"Refusing to overwrite {path}: its generated-section markers are out of order. "
+                "Restore the marker order or move the file before compiling."
+            )
+        return start, end
+
     def _render_managed_page(self, path: Path, generated: str) -> None:
         if path.exists():
             existing = path.read_text(encoding="utf-8", errors="replace")
-            start = existing.find(self.GENERATED_START)
-            end = existing.find(self.GENERATED_END)
-            if start >= 0 and end > start:
-                updated = (
-                    existing[: start + len(self.GENERATED_START)]
-                    + "\n\n"
-                    + generated.strip()
-                    + "\n\n"
-                    + existing[end:]
-                )
-                path.write_text(updated, encoding="utf-8")
-                return
+            start, end = self._managed_section_bounds(existing, path)
+            updated = (
+                existing[: start + len(self.GENERATED_START)]
+                + "\n\n"
+                + generated.strip()
+                + "\n\n"
+                + existing[end:]
+            )
+            path.write_text(updated, encoding="utf-8")
+            return
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             "---\npplx_managed: true\n---\n\n"
@@ -942,6 +956,12 @@ class WikiWorkspace:
             )
         )
         if not dry_run:
+            # Validate every existing target before changing any of them, so a
+            # damaged or user-owned page cannot cause a partially updated wiki.
+            for path, _ in generated_pages:
+                if path.exists():
+                    existing = path.read_text(encoding="utf-8", errors="replace")
+                    self._managed_section_bounds(existing, path)
             for path, generated in generated_pages:
                 self._render_managed_page(path, generated)
         return [path for path, _ in generated_pages]
