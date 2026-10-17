@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import pytest
 from typer.testing import CliRunner
 
@@ -11,6 +14,7 @@ from pplx_cli.config import (
     load_default_provider,
     save_api_key,
 )
+from pplx_cli.notes import NotesDB
 
 
 def response_json(content="Mocked response"):
@@ -231,3 +235,131 @@ def test_version_flag(runner):
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
     assert "Perplexity CLI version" in result.stdout
+
+
+def test_note_commands_create_list_view_and_report_missing(
+    runner, mock_config, monkeypatch
+):
+    monkeypatch.setattr(NotesDB, "_generate_embedding", lambda self, text: b"")
+    directory = str(mock_config)
+    created = runner.invoke(
+        app,
+        [
+            "note",
+            "--title",
+            "Research",
+            "--content",
+            "Evidence goes here.",
+            "--tag",
+            "work",
+            "--dir",
+            directory,
+        ],
+    )
+    listed = runner.invoke(app, ["list-notes", "--tag", "work", "--dir", directory])
+    viewed = runner.invoke(app, ["view-note", "1", "--dir", directory])
+    missing = runner.invoke(app, ["view-note", "99", "--dir", directory])
+    empty = runner.invoke(app, ["list-notes", "--tag", "missing", "--dir", directory])
+
+    assert created.exit_code == 0
+    assert "ID: 1" in created.stdout
+    assert listed.exit_code == 0 and "Research" in listed.stdout
+    assert "Research" not in empty.stdout
+    assert viewed.exit_code == 0 and "Evidence goes here." in viewed.stdout
+    assert missing.exit_code == 1 and "not found" in missing.stdout
+    assert empty.exit_code == 0 and "No notes found" in empty.stdout
+
+
+def test_rag_stats_formats_search_and_database_configuration(runner, mock_config, monkeypatch):
+    class FakeSearchEngine:
+        def __init__(self, rag_db):
+            assert rag_db == "rag-db"
+
+        def get_search_stats(self):
+            return {
+                "database_stats": {
+                    "total_documents": 3,
+                    "by_content_type": {
+                        "note": {"chunks": 2, "unique_sources": 1}
+                    },
+                },
+                "search_config": {
+                    "default_mode": "hybrid",
+                    "rrf_k": 60,
+                    "vector_weight": 1.0,
+                    "keyword_weight": 1.0,
+                },
+                "embedding_model": {
+                    "model_name": "fake-model",
+                    "device": "cpu",
+                    "embedding_dim": 4,
+                    "quantized": False,
+                },
+            }
+
+    monkeypatch.setattr("pplx_cli.cli.get_rag_db", lambda: "rag-db")
+    monkeypatch.setattr("pplx_cli.cli.HybridSearchEngine", FakeSearchEngine)
+
+    result = runner.invoke(app, ["rag-stats"])
+
+    assert result.exit_code == 0
+    assert "Total Documents: 3" in result.stdout
+    assert "Chunks: 2" in result.stdout
+    assert "Model: fake-model" in result.stdout
+
+
+def test_rag_index_confirmation_and_result_messages(runner, monkeypatch):
+    calls = []
+
+    class FakeIndexer:
+        def __init__(self, rag_db):
+            assert rag_db == "rag-db"
+
+        def reindex_all(self, clear_first):
+            calls.append(clear_first)
+            return False
+
+    monkeypatch.setattr("pplx_cli.cli.get_rag_db", lambda: "rag-db")
+    monkeypatch.setattr("pplx_cli.cli.BatchIndexer", FakeIndexer)
+
+    cancelled = runner.invoke(app, ["rag-index"], input="n\n")
+    completed = runner.invoke(app, ["rag-index", "--clear"], input="y\n")
+
+    assert cancelled.exit_code == 0 and "cancelled" in cancelled.stdout.lower()
+    assert completed.exit_code == 0 and "some errors" in completed.stdout.lower()
+    assert calls == [True]
+
+
+def test_rag_config_show_and_update_settings(runner, monkeypatch, tmp_path):
+    class FakeEmbeddingModel:
+        def get_model_info(self):
+            return {
+                "model_name": "fake-model",
+                "device": "cpu",
+                "embedding_dim": 4,
+                "quantized": False,
+                "cache_size": 10,
+                "max_sequence_length": 128,
+            }
+
+    monkeypatch.setattr("pplx_cli.cli.get_embedding_model", lambda: FakeEmbeddingModel())
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+
+    shown = runner.invoke(app, ["rag-config", "--show"])
+    updated = runner.invoke(
+        app,
+        [
+            "rag-config",
+            "--model",
+            "small",
+            "--device",
+            "cpu",
+            "--embedding-provider",
+            "perplexity",
+        ],
+    )
+
+    assert shown.exit_code == 0 and "fake-model" in shown.stdout
+    assert updated.exit_code == 0 and "Configuration saved" in updated.stdout
+    saved = json.loads((tmp_path / ".config/perplexity/rag_config.json").read_text())
+    assert saved == {"model": "small", "device": "cpu", "embedding_provider": "perplexity"}
