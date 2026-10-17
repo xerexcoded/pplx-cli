@@ -226,6 +226,7 @@ def test_compile_refuses_to_replace_damaged_source_page(
         lambda *args, **kwargs: ChatCompletion(content="Initial summary.", model="fake"),
     )
     source_page, overview = workspace.compile()
+    original_overview = overview.read_text(encoding="utf-8")
     damaged_page = "# Manual source notes\n\n<!-- pplx:generated:end -->\n"
     source_page.write_text(damaged_page, encoding="utf-8")
     completion_calls = []
@@ -239,7 +240,7 @@ def test_compile_refuses_to_replace_damaged_source_page(
         workspace.compile()
 
     assert source_page.read_text(encoding="utf-8") == damaged_page
-    assert overview.exists()
+    assert overview.read_text(encoding="utf-8") == original_overview
     assert completion_calls == []
 
 
