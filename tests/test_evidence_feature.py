@@ -196,7 +196,7 @@ def test_damaged_source_page_never_generates_or_changes_files(tmp_path, monkeypa
     path.parent.mkdir()
     path.write_bytes(data)
     monkeypatch.setattr('pplx_cli.wiki.workspace.query_chat_completion', lambda *a, **k: pytest.fail('model called'))
-    with pytest.raises((ValueError, UnicodeDecodeError)):
+    with pytest.raises(ValueError, match='markers|codec'):
         workspace.compile()
     assert path.read_bytes() == data
     assert source.read_bytes() == b'vector evidence'
@@ -230,3 +230,40 @@ def test_hosted_compilation_retains_eight_chunk_limit(tmp_path, monkeypatch):
     workspace.compile(provider='perplexity')
     assert 'Vector evidence 7' in prompts[0]
     assert 'Vector evidence 8' not in prompts[0]
+
+
+def test_mixed_valid_and_invalid_reference_requires_repair():
+    responses = iter(['Supported [L1] but invalid [Lfoo]', 'Supported [L1]'])
+    answer = grounded_answer('Q?', [Evidence('L1', 'loc', 'text')], lambda prompt: next(responses))
+    assert answer.content == 'Supported [L1]'
+
+
+def test_footnote_unknown_id_is_rejected_even_with_valid_reference():
+    responses = iter(['Supported [^source-1] and [^other]', 'Still invalid [^other]'])
+    with pytest.raises(CitationError):
+        grounded_answer('Q?', [Evidence('source-1', 'loc', 'text')],
+                        lambda prompt: next(responses), footnotes=True)
+
+
+def test_bracket_prose_links_and_code_do_not_count_as_citations():
+    answer = grounded_answer('Q?', [Evidence('L1', 'loc', 'text')],
+        lambda prompt: 'Claim [L1], [sic], [Lfoo](https://example.test), and `[Lbad]`.')
+    assert '[L1]' in answer.content
+
+
+def test_optional_reranker_runtime_failure_preserves_hybrid_scores(tmp_path, monkeypatch, caplog):
+    import sys
+    import types
+    from tests.test_wiki_workspace import FakeEmbeddingModel
+    from pplx_cli.wiki import WikiWorkspace
+    workspace = WikiWorkspace(tmp_path, embedding_model=FakeEmbeddingModel())
+    (tmp_path / 'source.txt').write_text('Vector evidence', encoding='utf-8')
+    workspace.sync()
+    results = workspace.search('vector')
+    before = [result.score for result in results]
+    def fail(*args, **kwargs):
+        raise RuntimeError('model unavailable')
+    monkeypatch.setitem(sys.modules, 'sentence_transformers', types.SimpleNamespace(CrossEncoder=fail))
+    workspace._rerank('vector', results)
+    assert [result.score for result in results] == before
+    assert 'using hybrid ranking' in caplog.text
