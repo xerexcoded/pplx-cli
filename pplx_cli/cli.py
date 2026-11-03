@@ -519,7 +519,7 @@ def ask_notes(
         if selected_provider == Provider.OLLAMA:
             try:
                 context_tokens = get_context_budget(selected_model)
-                output_tokens = get_output_budget(selected_model)
+                output_tokens = get_output_budget(context_tokens)
                 evidence = []
                 for note, _ in similar_notes:
                     item = Evidence(
