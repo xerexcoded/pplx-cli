@@ -278,3 +278,36 @@ def test_unqualified_name_uses_verified_canonical_name(setup_ollama, requests_mo
     register(requests_mock)
     query_chat_completion("hello", model="test", provider=Provider.OLLAMA)
     assert [r.json()["model"] for r in requests_mock.request_history if r.path in ("/api/show", "/api/chat")] == ["test:latest", "test:latest"]
+
+
+def test_discovery_filters_ineligible_models_and_lists_valid(setup_ollama, requests_mock):
+    from pplx_cli.ollama import list_chat_models
+    register(requests_mock, tags={"models": [
+        {"name": "cloud:latest", "remote_host": "cloud.example"},
+        {"name": "missing:latest"}, {"name": "small:latest"},
+        {"name": "embedding:latest"}, {"name": "good:latest"},
+    ]})
+    requests_mock.post("http://127.0.0.1:11434/api/show", [
+        {"json": {"capabilities": ["completion"], "model_info": {}}},
+        {"json": {"capabilities": ["completion"], "model_info": {"x.context_length": 512}}},
+        {"json": {"capabilities": ["embedding"], "model_info": {"x.context_length": 4096}}},
+        {"json": {"capabilities": ["completion"], "model_info": {"x.context_length": 4096}}},
+    ])
+    assert list_chat_models() == ["good:latest"]
+    shows = [request.json()["model"] for request in requests_mock.request_history if request.path == "/api/show"]
+    assert shows == ["missing:latest", "small:latest", "embedding:latest", "good:latest"]
+
+
+@pytest.mark.parametrize("value", [True, "4096", -1, 0])
+def test_discovery_rejects_malformed_context(setup_ollama, requests_mock, value):
+    from pplx_cli.ollama import list_chat_models
+    register(requests_mock, show={"capabilities": ["completion"], "model_info": {"x.context_length": value}})
+    with pytest.raises(OllamaError, match="context metadata is malformed"):
+        list_chat_models()
+
+
+def test_discovery_rejects_malformed_capabilities(setup_ollama, requests_mock):
+    from pplx_cli.ollama import list_chat_models
+    register(requests_mock, show={"capabilities": "completion", "model_info": {"x.context_length": 4096}})
+    with pytest.raises(OllamaError, match="capabilities are unavailable"):
+        list_chat_models()
