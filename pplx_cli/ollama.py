@@ -10,11 +10,15 @@ from contextvars import ContextVar
 from urllib.parse import urlsplit
 
 import requests
+import logging
 
 from .config import Config, Provider, load_ollama_settings
 
 
+_logger = logging.getLogger(__name__)
+
 _override = ContextVar("ollama_settings", default=None)
+_operation = ContextVar("ollama_verified_operation", default=None)
 
 
 @contextmanager
@@ -61,11 +65,16 @@ def _request(session, method, path, *, body=None):
                                    allow_redirects=False)
         if response.status_code != 200:
             raise OllamaError(f"Ollama {path} returned HTTP {response.status_code}; verify your local daemon and model")
-        value = response.json()
-    except (requests.RequestException, ValueError) as error:
+    except requests.RequestException as error:
         raise OllamaError(f"Cannot verify local Ollama at {endpoint}; start a compatible daemon with cloud disabled: {error}") from error
+    try:
+        value = response.json()
+    except ValueError as error:
+        error_type = _MalformedModel if path == "/api/show" else OllamaError
+        raise error_type(f"Unsupported or malformed Ollama {path} response") from error
     if not isinstance(value, dict):
-        raise OllamaError(f"Unsupported or malformed Ollama {path} response")
+        error_type = _MalformedModel if path == "/api/show" else OllamaError
+        raise error_type(f"Unsupported or malformed Ollama {path} response")
     return value
 
 
@@ -92,6 +101,10 @@ def _models(session):
     return models
 
 
+class _MalformedModel(OllamaError):
+    """The model's own metadata cannot be interpreted safely."""
+
+
 class _IneligibleModel(OllamaError):
     """An installed model is explicitly non-chat or cloud-routed."""
 
@@ -104,7 +117,7 @@ def _check_remote_markers(obj, model):
         if field in obj:
             value = obj[field]
             if not isinstance(value, str):
-                raise OllamaError(f"Malformed Ollama {field} metadata for {model!r}")
+                raise _MalformedModel(f"Malformed Ollama {field} metadata for {model!r}")
             if value:
                 raise _IneligibleModel(f"Ollama model {model!r} is cloud-routed and cannot be used locally")
 
@@ -114,15 +127,15 @@ def _model_context(info):
     if model_info is None:
         raise _IneligibleModel("Ollama model context metadata is unavailable; select a compatible model")
     if not isinstance(model_info, dict):
-        raise OllamaError("Ollama model context metadata is malformed")
+        raise _MalformedModel("Ollama model context metadata is malformed")
     values = [value for key, value in model_info.items()
               if isinstance(key, str) and key.endswith(".context_length")]
     if not values:
         raise _IneligibleModel("Ollama model context metadata is missing")
     if any(isinstance(value, bool) or not isinstance(value, int) for value in values):
-        raise OllamaError("Ollama model context metadata is malformed")
+        raise _MalformedModel("Ollama model context metadata is malformed")
     if any(value <= 0 for value in values):
-        raise OllamaError("Ollama model context metadata is malformed")
+        raise _MalformedModel("Ollama model context metadata is malformed")
     if any(value < 1024 for value in values):
         raise _IneligibleModel("Ollama model context metadata advertises an unsupported context")
     return min(values)
@@ -134,7 +147,7 @@ def _show(session, model, entry):
     _check_remote_markers(info, model)
     capabilities = info.get("capabilities")
     if not isinstance(capabilities, list) or not all(isinstance(c, str) for c in capabilities):
-        raise OllamaError("Ollama model capabilities are unavailable; upgrade the daemon")
+        raise _MalformedModel("Ollama model capabilities are unavailable; upgrade the daemon")
     if "completion" not in capabilities:
         raise _IneligibleModel(f"Ollama model {model!r} is not chat-capable")
     _model_context(info)
@@ -149,7 +162,8 @@ def list_chat_models():
         for entry in _models(session):
             try:
                 _show(session, entry["name"], entry)
-            except _IneligibleModel:
+            except (_IneligibleModel, _MalformedModel) as error:
+                _logger.warning("Skipping incompatible Ollama model %s: %s", entry["name"], error)
                 continue
             result.append(entry["name"])
         return result
@@ -167,23 +181,55 @@ def _verify(session, model):
     return resolved, _show(session, resolved, matches[0])
 
 
-def verify_model(model=None):
-    model = model or Config.get_instance().get_default_model(Provider.OLLAMA)
-    if not isinstance(model, str) or not model:
+def _selected_model(model=None):
+    active = _operation.get()
+    if active is not None:
+        if model is not None and model not in (active["requested"], active["resolved"]):
+            raise OllamaError("A different Ollama model cannot be used inside an active verified operation")
+        return active["requested"]
+    selected = model or Config.get_instance().get_default_model(Provider.OLLAMA)
+    if not isinstance(selected, str) or not selected:
         raise OllamaError("No Ollama model configured; run 'perplexity setup --provider ollama'.")
+    return selected
+
+
+@contextmanager
+def verified_operation(model=None):
+    """Scope preflight reuse to one operation, refreshing before each generation."""
+    selected = _selected_model(model)
+    existing = _operation.get()
+    if existing is not None:
+        yield
+        return
     with _session() as session:
-        _verify(session, model)
-    return model
+        resolved, info = _verify(session, selected)
+        state = {"requested": selected, "resolved": resolved, "info": info, "session": session}
+        token = _operation.set(state)
+        try:
+            yield
+        finally:
+            _operation.reset(token)
+
+
+def _ready(state):
+    if state["info"] is None:
+        state["resolved"], state["info"] = _verify(state["session"], state["requested"])
+    return state["info"]
+
+
+def verify_model(model=None):
+    selected = _selected_model(model)
+    with verified_operation(selected):
+        _ready(_operation.get())
+    return selected
 
 
 def get_context_budget(model=None):
-    """Verify the daemon/model and return the configured, model-capped window."""
-    model = model or Config.get_instance().get_default_model(Provider.OLLAMA)
-    if not isinstance(model, str) or not model:
-        raise OllamaError("No Ollama model configured; run 'perplexity setup --provider ollama'.")
-    with _session() as session:
-        _, info = _verify(session, model)
-        return min(session._pplx_settings[2], _model_context(info))
+    """Return the model-capped window, verifying if no scoped preflight is available."""
+    selected = _selected_model(model)
+    with verified_operation(selected):
+        state = _operation.get()
+        return min(state["session"]._pplx_settings[2], _model_context(_ready(state)))
 
 
 def get_output_budget(context_tokens):
@@ -194,21 +240,23 @@ def get_output_budget(context_tokens):
 
 
 def chat(messages, model=None):
-    model = model or Config.get_instance().get_default_model(Provider.OLLAMA)
-    if not isinstance(model, str) or not model:
-        raise OllamaError("No Ollama model configured; run 'perplexity setup --provider ollama'.")
-    with _session() as session:
-        model, info = _verify(session, model)
+    selected = _selected_model(model)
+    with verified_operation(selected):
+        state = _operation.get()
+        session = state["session"]
+        info = _ready(state)
+        model = state["resolved"]
         context = min(session._pplx_settings[2], _model_context(info))
         output_budget = get_output_budget(context)
-        # UTF-8 bytes provide a conservative token estimate for ordinary
-        # byte-based tokenizers, with room for role/template framing.
+        # UTF-8 bytes conservatively bound ordinary byte-tokenizer input.
         input_budget = sum(len(item["content"].encode("utf-8")) + 32 for item in messages)
         if input_budget + output_budget > context:
             raise OllamaError(
                 "Input is too large for the configured Ollama context and output reserve. "
                 "Shorten the question or evidence, or increase the configured context within the model limit."
             )
+        # Consume before sending: even a failed generation must be reverified.
+        state["info"] = None
         payload = _request(session, "POST", "/api/chat", body={"model": model, "messages": messages,
                            "stream": False, "options": {"num_ctx": context,
                            "num_predict": output_budget}})
@@ -220,4 +268,5 @@ def chat(messages, model=None):
     message = payload.get("message")
     if not isinstance(message, dict) or not isinstance(message.get("content"), str):
         raise OllamaError("Malformed Ollama chat response")
+    payload.setdefault("model", model)
     return message["content"], payload
