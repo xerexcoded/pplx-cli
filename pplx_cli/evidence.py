@@ -98,11 +98,13 @@ def grounded_answer(question: str, evidence: Sequence[Evidence], writer: Callabl
     if not included:
         raise CitationError("No evidence fits in the model context budget.", evidence)
     prompt = prefix + ''.join(blocks)
-    pattern = re.compile(r'\[\^((?:source-\d+|L\d+|N\d+))\]' if footnotes else r'\[((?:source-\d+|L\d+|N\d+))\]')
+    pattern = re.compile(r'\[\^([^\]\s]+)\]' if footnotes else r'\[((?:L|N)[A-Za-z0-9_-]*|source-[A-Za-z0-9_-]*)\](?!\()')
     allowed = {item.id for item in included}
 
     def invalid(answer: str) -> bool:
-        ids = pattern.findall(answer)
+        # Code spans and Markdown links are not citations.
+        prose = re.sub(r"(`+).*?\1", "", answer, flags=re.S)
+        ids = pattern.findall(prose)
         return bool(set(ids) - allowed) or (not ids and answer.strip().lower().rstrip('.') != 'insufficient evidence')
 
     answer = writer(prompt)
