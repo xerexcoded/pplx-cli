@@ -141,7 +141,7 @@ def test_malformed_remote_markers_fail_closed(setup_ollama, requests_mock, marke
     assert [r.path for r in requests_mock.request_history] == ["/api/status", "/api/tags"]
 
 
-def test_discovery_skips_cloud_without_show_and_propagates_malformed(setup_ollama, requests_mock, caplog):
+def test_discovery_skips_cloud_without_show_and_warns_for_malformed(setup_ollama, requests_mock, caplog):
     from pplx_cli.ollama import list_chat_models
     register(requests_mock, tags={"models": [{"name": "cloud:latest", "remote_host": "cloud.invalid"}, {"name": "test:latest"}]}, show={"capabilities": "invalid"})
     with caplog.at_level("WARNING"):
@@ -311,18 +311,22 @@ def test_discovery_filters_ineligible_models_and_lists_valid(setup_ollama, reque
 
 
 @pytest.mark.parametrize("value", [True, "4096", -1, 0])
-def test_discovery_rejects_malformed_context(setup_ollama, requests_mock, value, caplog):
+def test_discovery_skips_malformed_context_with_warning(setup_ollama, requests_mock, value, caplog):
     from pplx_cli.ollama import list_chat_models
     register(requests_mock, show={"capabilities": ["completion"], "model_info": {"x.context_length": value}})
     with caplog.at_level("WARNING"):
         assert list_chat_models() == []
+    assert "test:latest" in caplog.text
+    assert "context metadata is malformed" in caplog.text
 
 
-def test_discovery_rejects_malformed_capabilities(setup_ollama, requests_mock, caplog):
+def test_discovery_skips_malformed_capabilities_with_warning(setup_ollama, requests_mock, caplog):
     from pplx_cli.ollama import list_chat_models
     register(requests_mock, show={"capabilities": "completion", "model_info": {"x.context_length": 4096}})
     with caplog.at_level("WARNING"):
         assert list_chat_models() == []
+    assert "test:latest" in caplog.text
+    assert "capabilities are unavailable" in caplog.text
 
 
 @pytest.mark.parametrize("context", [True, 1023, 4096.0, "4096", None])

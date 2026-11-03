@@ -538,3 +538,79 @@ def test_nested_local_scope_still_verifies_operation_before_retrieval(tmp_path, 
             workspace.query('question', provider='ollama', model='local-model')
         else:
             workspace.compile(provider='ollama', model='local-model')
+
+
+def test_wiki_query_reuses_outer_verified_ollama_session_and_reverifies_repair(
+        tmp_path, monkeypatch, requests_mock):
+    from pplx_cli import ollama
+    from pplx_cli.wiki import WikiWorkspace
+    from tests.test_wiki_workspace import FakeEmbeddingModel
+
+    workspace = WikiWorkspace(tmp_path, embedding_model=FakeEmbeddingModel())
+    (tmp_path / 'notes.txt').write_text('Vector evidence is local.', encoding='utf-8')
+    workspace.sync()
+    monkeypatch.setattr(workspace, '_rerank', lambda *args: None)
+
+    root = 'http://127.0.0.1:11434'
+    requests_mock.get(root + '/api/status', json={'cloud': {'disabled': True}})
+    requests_mock.get(root + '/api/tags', json={'models': [{'name': 'test:latest'}]})
+    requests_mock.post(root + '/api/show', json={
+        'capabilities': ['completion'], 'model_info': {'test.context_length': 4096}})
+    requests_mock.post(root + '/api/chat', [
+        {'json': {'message': {'content': 'Unsupported [L99]'}}},
+        {'json': {'message': {'content': 'Vector evidence is local [L1]'}}},
+    ])
+    sessions = []
+    real_session = ollama.requests.Session
+    def track_session():
+        session = real_session()
+        sessions.append(session)
+        return session
+    monkeypatch.setattr(ollama.requests, 'Session', track_session)
+
+    with ollama.temporary_settings({'endpoint': root, 'context': 4096}), \
+            ollama.verified_operation('test'):
+        # The CLI creates the outer scope; the workspace accepts its resolved alias.
+        answer = workspace.query('vector', provider='ollama', model='test:latest')
+
+    assert answer.local_completion.content == 'Vector evidence is local [L1]'
+    assert len(sessions) == 1
+    history = requests_mock.request_history
+    assert [request.path for request in history] == [
+        '/api/status', '/api/tags', '/api/show', '/api/chat',
+        '/api/status', '/api/tags', '/api/show', '/api/chat',
+    ]
+    assert [request.json()['model'] for request in history
+            if request.path in ('/api/show', '/api/chat')] == ['test:latest'] * 4
+    assert all(request.json()['options'] == {'num_ctx': 4096, 'num_predict': 1024}
+               for request in history if request.path == '/api/chat')
+
+
+def test_wiki_compile_reuses_outer_verified_ollama_scope(tmp_path, requests_mock):
+    from pplx_cli import ollama
+    from pplx_cli.wiki import WikiWorkspace
+    from tests.test_wiki_workspace import FakeEmbeddingModel
+
+    workspace = WikiWorkspace(tmp_path, embedding_model=FakeEmbeddingModel())
+    (tmp_path / 'notes.txt').write_text('Vector evidence is local.', encoding='utf-8')
+    workspace.sync()
+    root = 'http://127.0.0.1:11434'
+    requests_mock.get(root + '/api/status', json={'cloud': {'disabled': True}})
+    requests_mock.get(root + '/api/tags', json={'models': [{'name': 'test:latest'}]})
+    requests_mock.post(root + '/api/show', json={
+        'capabilities': ['completion'], 'model_info': {'test.context_length': 4096}})
+    requests_mock.post(root + '/api/chat', json={
+        'message': {'content': 'Vector evidence is local [^source-1]'}})
+
+    with ollama.temporary_settings({'endpoint': root, 'context': 4096}), \
+            ollama.verified_operation('test'):
+        pages = workspace.compile(provider='ollama', model='test:latest')
+
+    assert len(pages) == 2
+    history = requests_mock.request_history
+    assert [request.path for request in history] == [
+        '/api/status', '/api/tags', '/api/show', '/api/chat',
+        '/api/status', '/api/tags', '/api/show', '/api/chat',
+    ]
+    assert [request.json()['model'] for request in history
+            if request.path in ('/api/show', '/api/chat')] == ['test:latest'] * 4
