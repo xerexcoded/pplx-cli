@@ -1,6 +1,13 @@
 name: Publish to PyPI
 
 on:
+  pull_request:
+    paths:
+      - 'pplx_cli/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+      - 'poetry.lock'
+      - '.github/workflows/publish.yml'
   push:
     branches:
       - main
@@ -30,8 +37,11 @@ jobs:
       - name: Install dependencies
         run: poetry install --with test
 
-      - name: Run tests
-        run: poetry run pytest
+      - name: Run tests with coverage
+        run: poetry run coverage run -m pytest
+
+      - name: Report coverage
+        run: poetry run coverage report -m
 
   publish:
     needs: test  # Only run if tests pass
