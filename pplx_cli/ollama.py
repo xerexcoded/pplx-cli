@@ -119,6 +119,8 @@ def _model_context(info):
         raise _IneligibleModel("Ollama model context metadata is missing")
     if any(isinstance(value, bool) or not isinstance(value, int) for value in values):
         raise OllamaError("Ollama model context metadata is malformed")
+    if any(value <= 0 for value in values):
+        raise OllamaError("Ollama model context metadata is malformed")
     if any(value < 1024 for value in values):
         raise _IneligibleModel("Ollama model context metadata advertises an unsupported context")
     return min(values)
