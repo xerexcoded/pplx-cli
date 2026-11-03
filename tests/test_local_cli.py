@@ -98,3 +98,19 @@ def test_default_local_ingest_rejects_live_urls_before_models(local_cli, monkeyp
     result = runner.invoke(app, ["wiki", "ingest", "https://example.com/article", "--dir", str(directory)])
     assert result.exit_code == 2
     assert "Live URL capture" in result.output
+
+
+def test_invalid_citations_show_evidence_explicitly(local_cli, monkeypatch):
+    from pplx_cli.evidence import CitationError, Evidence
+    from pplx_cli.cli import _print_command_error
+    runner, _ = local_cli
+    item = Evidence("N1", "notes.db#note-1", "Inspectable private note excerpt.")
+    error = CitationError("Invalid citations.", [item])
+    def fail(*args, **kwargs):
+        raise error
+    monkeypatch.setattr("pplx_cli.cli._wiki_workspace", fail)
+    result = runner.invoke(app, ["wiki", "query", "question", "--dir", "/tmp"])
+    assert result.exit_code == 1
+    assert "Retrieved evidence:" in result.output
+    assert item.locator in result.output
+    assert item.excerpt in result.output

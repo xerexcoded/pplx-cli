@@ -13,7 +13,7 @@ from .ollama import (
     OllamaError, verify_model, list_chat_models, temporary_settings,
     get_context_budget, get_output_budget,
 )
-from .evidence import Evidence, grounded_answer, split_evidence
+from .evidence import CitationError, Evidence, grounded_answer, split_evidence
 from .config import (
     Config,
     PerplexityModel,
@@ -256,12 +256,20 @@ def ensure_api_key(provider: Provider) -> None:
         raise typer.Exit(code=1)
 
 
+def _print_command_error(error):
+    typer.echo(f"Error: {error}", err=True)
+    if isinstance(error, CitationError):
+        typer.echo("Retrieved evidence:", err=True)
+        for item in error.evidence:
+            typer.echo(f"[{item.id}] {item.locator}\n{item.excerpt}", err=True)
+
+
 @contextmanager
 def _ollama_errors():
     try:
         yield
     except (ValueError, RuntimeError) as error:
-        typer.echo(f"Error: {error}", err=True)
+        _print_command_error(error)
         raise typer.Exit(code=1) from error
 
 
@@ -359,7 +367,7 @@ def ask(
             if not wiki:
                 typer.echo(f"Answer: {response}")
         except Exception as e:
-            typer.echo(f"Error: {str(e)}", err=True)
+            _print_command_error(e)
             raise typer.Exit(code=1)
 
 @app.command(name="list-models")
@@ -544,7 +552,7 @@ def ask_notes(
                     typer.echo(f"Omitted {answer.omitted} evidence excerpt(s) to fit the model context.")
                 return
             except (ValueError, RuntimeError) as error:
-                typer.echo(f"Error: {error}", err=True)
+                _print_command_error(error)
                 raise typer.Exit(code=1)
 
         # Preserve the existing hosted-provider prompt and note references.
