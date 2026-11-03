@@ -182,3 +182,47 @@ def test_cli_verification_failure_is_actionable(setup_ollama, monkeypatch, argum
     assert result.exit_code == 1
     assert "Start the daemon with cloud disabled" in result.output
     assert "Traceback" not in result.output
+
+
+def test_session_disables_proxy_environment(monkeypatch):
+    from pplx_cli import ollama
+    class FakeSession:
+        def __init__(self):
+            self.trust_env = True
+    monkeypatch.setattr(ollama.requests, "Session", FakeSession)
+    assert ollama._session().trust_env is False
+
+
+@pytest.mark.parametrize("timeout", [float("nan"), float("inf"), float("-inf"), True, 0])
+def test_invalid_timeout_rejected_at_save_and_use(setup_ollama, timeout):
+    with pytest.raises(ValueError):
+        config.save_ollama_settings("http://127.0.0.1:11434", "test", timeout=timeout)
+    with temporary_settings({"timeout": timeout}):
+        with pytest.raises(OllamaError, match="timeout"):
+            verify_model("test")
+
+
+def test_local_settings_preserve_hosted_defaults_and_endpoint(setup_ollama):
+    config.save_api_key("secret", Provider.NVIDIA)
+    config.save_ollama_settings("http://127.0.0.2:1234", "model:latest", timeout=240, context=8192, make_default=False)
+    data = json.loads(config.CONFIG_FILE.read_text())
+    assert data["provider"] == "nvidia"
+    assert data["api_keys"]["nvidia"] == "secret"
+    assert data["ollama"] == {"endpoint": "http://127.0.0.2:1234", "model": "model:latest", "timeout": 240, "context": 8192}
+
+
+@pytest.mark.parametrize("arguments, constructor", [
+    (["ask-notes", "secret"], "NotesDB"),
+    (["wiki", "query", "secret", "--dir", "/tmp"], "_wiki_workspace"),
+    (["wiki", "compile", "--dir", "/tmp"], "_wiki_workspace"),
+])
+def test_verify_precedes_retrieval_construction(setup_ollama, monkeypatch, arguments, constructor):
+    from typer.testing import CliRunner
+    from pplx_cli.cli import app
+    def fail(model):
+        raise OllamaError("daemon unavailable")
+    monkeypatch.setattr("pplx_cli.cli.verify_model", fail)
+    monkeypatch.setattr("pplx_cli.cli." + constructor, lambda *args: pytest.fail("constructed before verification"))
+    result = CliRunner().invoke(app, arguments + ["--provider", "ollama", "--model", "test"])
+    assert result.exit_code == 1
+    assert "daemon unavailable" in result.output

@@ -495,12 +495,9 @@ def ask_notes(
         ])
     
         # Prepare the prompt with context
-        prompt = f"""Based on the following notes, please answer this question: {query}
-
-    Relevant Notes:
-    {context}
-
-    Please provide a comprehensive answer based solely on the information in these notes."""
+        prompt = (f"Based on the following notes, please answer this question: {query}\n\n"
+                  f"Relevant Notes:\n{context}\n\n"
+                  "Please provide a comprehensive answer based solely on the information in these notes.")
     
         # Get a response from the selected chat provider.
         try:

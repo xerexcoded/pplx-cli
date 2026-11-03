@@ -1,5 +1,10 @@
-"""Fail-closed transport for a locally configured Ollama daemon."""
+"""Fail-closed transport for a locally configured Ollama daemon.
+
+The trust boundary is daemon-reported policy and model metadata at verification
+time; it is not OS-level isolation or an atomic guarantee against daemon changes.
+"""
 import ipaddress
+import math
 from contextlib import contextmanager
 from contextvars import ContextVar
 from urllib.parse import urlsplit
@@ -43,7 +48,7 @@ def _settings():
         raise OllamaError("Ollama endpoint must be a numeric loopback HTTP URL with a port")
     timeout = settings.get("timeout", 300)
     context = settings.get("context", 4096)
-    if (isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0
+    if (isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout <= 0
             or isinstance(context, bool) or not isinstance(context, int) or context < 1024):
         raise OllamaError("Invalid Ollama timeout or context setting; run setup again")
     return endpoint.rstrip("/"), timeout, context

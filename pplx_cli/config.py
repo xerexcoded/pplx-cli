@@ -1,6 +1,7 @@
 """Configuration and provider definitions for the Perplexity CLI."""
 
 import json
+import math
 import os
 import threading
 from dataclasses import dataclass
@@ -161,7 +162,10 @@ def load_ollama_settings() -> dict:
 
 def save_ollama_settings(endpoint: str, model: str, timeout: float = 300,
                          context: int = 4096, make_default: bool = True) -> None:
-    if timeout <= 0 or context < 1024 or not model:
+    if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
+            or not math.isfinite(timeout) or timeout <= 0
+            or isinstance(context, bool) or not isinstance(context, int)
+            or context < 1024 or not isinstance(model, str) or not model):
         raise ValueError("Ollama requires a model, a positive timeout and context of at least 1024")
     config = _read_config()
     config["ollama"] = {"endpoint": endpoint, "model": model, "timeout": timeout, "context": context}
