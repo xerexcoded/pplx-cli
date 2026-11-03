@@ -27,9 +27,7 @@ class CitationError(ValueError):
 
     def __init__(self, message: str, evidence: Sequence[Evidence]):
         self.evidence = list(evidence)
-        super().__init__(message + "\nRetrieved evidence:\n" + "\n\n".join(
-            f"[{item.id}] {item.locator}\n{item.excerpt}" for item in evidence
-        ))
+        super().__init__(message)
 
 
 def _instructions(footnotes: bool) -> str:

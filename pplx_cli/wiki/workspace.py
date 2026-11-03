@@ -1032,16 +1032,20 @@ class WikiWorkspace:
                 "\n\n## Supporting evidence\n\n" + "\n\n".join(evidence_sections) +
                 "\n\n## Source\n\n" + self._source_footnote(row)))
             source_links.append(f"- [[sources/{page_name}|{row['title']}]] [^source-{row['id']}]")
-        # Summarize each bounded source summary; retain all batches rather than silently truncating.
+        # Synthesize all summaries in bounded batches, retaining source IDs.
         overview = []
+        question = "Create a concise wiki overview identifying themes and uncertainty across this evidence."
+        pending = []
         for ident, locator, summary in overview_parts:
-            item = Evidence(ident, locator, summary)
-            question = "Summarize this evidence for a wiki overview, including uncertainty."
-            for part in split_evidence(item, question, budget, output_tokens=output_budget, footnotes=True):
-                result = grounded_answer(question, [part],
-                    lambda prompt: query_chat_completion(prompt, provider=provider, model=model).content,
-                    context_tokens=budget, output_tokens=output_budget, footnotes=True)
-                overview.append(result.content.strip())
+            pending.extend(split_evidence(Evidence(ident, locator, summary), question, budget,
+                                          output_tokens=output_budget, footnotes=True))
+        while pending:
+            result = grounded_answer(question, pending,
+                lambda prompt: query_chat_completion(prompt, provider=provider, model=model).content,
+                context_tokens=budget, output_tokens=output_budget, footnotes=True)
+            overview.append(result.content.strip())
+            included = {id(item) for item in result.evidence}
+            pending = [item for item in pending if id(item) not in included]
         generated_pages.append((self.wiki_dir / "overview.md", "# Overview\n\n" + "\n\n".join(overview) +
             "\n\n## Source pages\n\n" + "\n".join(source_links) + "\n\n## Sources\n\n" +
             "\n".join(self._source_footnote(row) for row in rows)))

@@ -17,9 +17,10 @@ def test_grounded_answer_repairs_invalid_citations_and_reports_omissions():
 
 def test_grounded_answer_failure_exposes_evidence():
     item = Evidence('L1', 'file:1', 'original excerpt')
-    with pytest.raises(CitationError, match='original excerpt') as error:
+    with pytest.raises(CitationError, match='Citation validation failed') as error:
         grounded_answer('Question?', [item], lambda prompt: 'claim [L2]')
     assert error.value.evidence == [item]
+    assert item.excerpt not in str(error.value)
 
 
 def test_insufficient_evidence_needs_no_citation():
@@ -342,8 +343,8 @@ def test_compiled_pages_include_exact_source_excerpts_and_locators_at_2048(tmp_p
     def writer(prompt, **kwargs):
         import json
         prompts.append(prompt)
-        item = json.loads(prompt.split('Evidence (JSON records):\n', 1)[1])
-        return ChatCompletion(content=f"Supported [^{item['id']}]", model='fake')
+        records = [json.loads(line) for line in prompt.split('Evidence (JSON records):\n', 1)[1].splitlines()]
+        return ChatCompletion(content='Supported ' + ' '.join(f"[^{item['id']}]" for item in records), model='fake')
     monkeypatch.setattr('pplx_cli.wiki.workspace.query_chat_completion', writer)
     with local_only_mode():
         workspace.compile(provider='ollama')
@@ -458,3 +459,32 @@ def test_query_splits_large_evidence_and_returns_only_supplied_excerpt(tmp_path,
     assert all(result.content in raw.decode('utf-8') for result in answer.local_results)
     assert all(result.locator == 'Text' and result.source_id == 1 for result in answer.local_results)
     assert source.read_bytes() == raw
+
+
+def test_overview_batches_short_summaries_from_multiple_sources(tmp_path, monkeypatch):
+    import json
+    import sys
+    import types
+    from tests.test_wiki_workspace import FakeEmbeddingModel
+    from pplx_cli.api import ChatCompletion
+    from pplx_cli.local import local_only_mode
+    from pplx_cli.wiki import WikiWorkspace
+    workspace = WikiWorkspace(tmp_path, embedding_model=FakeEmbeddingModel())
+    (tmp_path / 'first.txt').write_text('First evidence', encoding='utf-8')
+    (tmp_path / 'second.txt').write_text('Second evidence', encoding='utf-8')
+    workspace.sync()
+    monkeypatch.setitem(sys.modules, 'pplx_cli.ollama', types.SimpleNamespace(
+        get_context_budget=lambda model: 4096, get_output_budget=lambda budget: 1024))
+    prompts = []
+    def writer(prompt, **kwargs):
+        prompts.append(prompt)
+        records = [json.loads(line) for line in prompt.split('Evidence (JSON records):\n', 1)[1].splitlines()]
+        ids = {record['id'] for record in records}
+        return ChatCompletion(content='Summary ' + ' '.join(f'[^{ident}]' for ident in ids), model='fake')
+    monkeypatch.setattr('pplx_cli.wiki.workspace.query_chat_completion', writer)
+    with local_only_mode():
+        workspace.compile(provider='ollama')
+    assert len(prompts) == 3
+    overview_records = [json.loads(line) for line in prompts[-1].split('Evidence (JSON records):\n', 1)[1].splitlines()]
+    assert {record['id'] for record in overview_records} == {'source-1', 'source-2'}
+    assert len(prompts[-1].encode('utf-8')) <= 4096 - 1024
