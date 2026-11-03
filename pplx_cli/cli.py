@@ -8,7 +8,11 @@ import platform
 import json
 from .api import query_chat
 from .local import local_only_mode
-from .ollama import OllamaError, verify_model, list_chat_models, temporary_settings
+from .ollama import (
+    OllamaError, verify_model, list_chat_models, temporary_settings,
+    get_context_budget, get_output_budget,
+)
+from .evidence import Evidence, grounded_answer, split_evidence
 from .config import (
     Config,
     PerplexityModel,
@@ -220,6 +224,21 @@ def setup(
         typer.echo("\nSetup cancelled.", err=True)
         raise typer.Exit(code=1)
 
+@app.command("prepare-models")
+def prepare_models(
+    include_reranker: bool = typer.Option(False, "--include-reranker", help="Also download the optional local reranker"),
+):
+    """Explicitly download local retrieval models, without starting Ollama."""
+    from .preparation import prepare_local_models
+
+    try:
+        for name in prepare_local_models(include_reranker=include_reranker):
+            typer.echo(f"Prepared: {name}")
+    except (ValueError, RuntimeError) as error:
+        typer.echo(f"Model preparation failed: {error}", err=True)
+        raise typer.Exit(code=1)
+
+
 def ensure_api_key(provider: Provider) -> None:
     """Check that the selected provider has a key without prompting in scripts."""
     config = Config.get_instance()
@@ -240,8 +259,8 @@ def ensure_api_key(provider: Provider) -> None:
 def _ollama_errors():
     try:
         yield
-    except OllamaError as error:
-        typer.echo(f"Ollama error: {error}", err=True)
+    except (ValueError, RuntimeError) as error:
+        typer.echo(f"Error: {error}", err=True)
         raise typer.Exit(code=1) from error
 
 
@@ -307,9 +326,7 @@ def ask(
                 )
                 response = answer.content
                 typer.echo(f"Answer: {response}")
-                typer.echo("\nLocal evidence:")
-                for result in answer.local_results:
-                    typer.echo(f"- {result.citation}")
+                _print_answer_evidence(answer)
                 if answer.web_completion:
                     typer.echo(f"\nWeb research:\n{answer.web_completion.content}")
                     for index, citation in enumerate(answer.web_completion.citations, start=1):
@@ -488,7 +505,38 @@ def ask_notes(
             typer.echo("No relevant notes found.")
             return
     
-        # Prepare context from similar notes
+        if selected_provider == Provider.OLLAMA:
+            try:
+                context_tokens = get_context_budget(selected_model)
+                output_tokens = get_output_budget(selected_model)
+                evidence = []
+                for note, _ in similar_notes:
+                    item = Evidence(
+                        f"N{note['id']}",
+                        f"{db.db_path}#note-{note['id']} ({note['title']})",
+                        note['content'],
+                    )
+                    evidence.extend(split_evidence(
+                        item, query, context_tokens, output_tokens=output_tokens,
+                    ))
+                answer = grounded_answer(
+                    query, evidence,
+                    lambda prompt: query_chat(prompt, model=selected_model, provider=selected_provider),
+                    context_tokens=context_tokens, output_tokens=output_tokens,
+                )
+                typer.echo("\nAnswer based on your notes:")
+                typer.echo(answer.content)
+                typer.echo("\nLocal evidence:")
+                for item in answer.evidence:
+                    typer.echo(f"- [{item.id}] {item.locator}\n{item.excerpt}")
+                if answer.omitted:
+                    typer.echo(f"Omitted {answer.omitted} evidence excerpt(s) to fit the model context.")
+                return
+            except (ValueError, RuntimeError) as error:
+                typer.echo(f"Error: {error}", err=True)
+                raise typer.Exit(code=1)
+
+        # Preserve the existing hosted-provider prompt and note references.
         context = "\n\n".join([
             f"Note {note['id']} - {note['title']}:\n{note['content']}"
             for note, similarity in similar_notes
@@ -1012,6 +1060,18 @@ def _wiki_workspace(directory: Path) -> WikiWorkspace:
     return WikiWorkspace.initialize(directory)
 
 
+def _print_answer_evidence(answer) -> None:
+    typer.echo("\nLocal evidence:")
+    for result in answer.local_results:
+        typer.echo(f"- {result.citation}")
+        excerpt = getattr(result, "content", "")
+        if excerpt:
+            typer.echo(excerpt)
+    omitted = getattr(answer, "omitted_evidence", 0)
+    if omitted:
+        typer.echo(f"Omitted {omitted} evidence excerpt(s) to fit the model context.")
+
+
 def _print_wiki_results(results) -> None:
     if not results:
         typer.echo("No evidence found.")
@@ -1157,9 +1217,7 @@ def wiki_query(
             limit=limit,
         )
         typer.echo(answer.content)
-        typer.echo("\nLocal evidence:")
-        for result in answer.local_results:
-            typer.echo(f"- {result.citation}")
+        _print_answer_evidence(answer)
         if answer.web_completion:
             typer.echo(f"\nWeb research:\n{answer.web_completion.content}")
             for index, citation in enumerate(answer.web_completion.citations, start=1):
