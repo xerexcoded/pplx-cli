@@ -106,7 +106,7 @@ def test_cli_verifies_before_constructing_workspace(setup_ollama, monkeypatch):
     result = CliRunner().invoke(app, ["wiki", "query", "private", "--dir", "/tmp", "--provider", "ollama", "--model", "test"])
     assert result.exit_code != 0
     assert events == ["verify"]
-    assert "Ollama error: unverified" in result.output
+    assert "Error: unverified" in result.output
 
 
 def test_cli_workspace_runs_inside_local_policy(setup_ollama, monkeypatch):

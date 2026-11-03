@@ -188,7 +188,7 @@ def setup(
             with temporary_settings({"endpoint": endpoint, "timeout": timeout, "context": context}):
                 models = list_chat_models()
             if not models:
-                raise ValueError("No installed local chat models found. Install one explicitly with 'ollama pull <model>' and retry.")
+                raise ValueError("No compatible, verifiable local chat models found. Check the warnings above, or explicitly install one with 'ollama pull <model>' and retry.")
             typer.echo("Installed local chat models:")
             for item in models:
                 typer.echo(f"- {item}")

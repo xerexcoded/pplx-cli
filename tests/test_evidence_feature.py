@@ -317,7 +317,7 @@ def test_context_budget_rejects_too_small_or_absent_evidence_without_writing():
             grounded_answer('Q?', evidence, no_writer, context_tokens=4096)
 
 
-@pytest.mark.parametrize('bad', ['[X99]', '[99]', '[Z9foo]'])
+@pytest.mark.parametrize('bad', ['[X99]', '[99]', '[Z9foo]', '[BOGUS]', '[FAKE_ID]'])
 def test_unknown_reference_shaped_ids_rejected_with_valid_reference(bad):
     with pytest.raises(CitationError):
         grounded_answer('Q?', [Evidence('L1', 'loc', 'text')],

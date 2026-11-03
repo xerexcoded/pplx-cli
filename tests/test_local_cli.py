@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
@@ -16,7 +17,7 @@ def local_cli(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "CONFIG_FILE", tmp_path / "config.json")
     Config._instance = None
     save_ollama_settings("http://127.0.0.1:11435", "test-local")
-    monkeypatch.setattr("pplx_cli.cli.verify_model", lambda model: "test-local")
+    monkeypatch.setattr("pplx_cli.cli.verified_operation", lambda model: nullcontext())
     yield CliRunner(), tmp_path
     Config._instance = None
 
