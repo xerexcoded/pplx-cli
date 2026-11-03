@@ -1,4 +1,16 @@
 import pytest
+from contextlib import contextmanager
+from types import SimpleNamespace
+
+
+def fake_ollama(**kwargs):
+    verify = kwargs.pop("verify_model", lambda model: None)
+    @contextmanager
+    def verified_operation(model):
+        verify(model)
+        yield
+    return SimpleNamespace(verified_operation=verified_operation, **kwargs)
+
 from pplx_cli.evidence import Evidence, CitationError, grounded_answer
 
 
@@ -72,7 +84,7 @@ def test_local_compile_processes_all_chunks_and_rejects_invalid_output(tmp_path,
     (tmp_path / 'source.md').write_text('# Source\n\n' + '\n\n'.join(
         f'## Part {i}\n\nVector evidence {i}' for i in range(10)), encoding='utf-8')
     workspace.sync()
-    monkeypatch.setitem(sys.modules, 'pplx_cli.ollama', types.SimpleNamespace(get_context_budget=lambda model: 4096, get_output_budget=lambda model: 1024))
+    monkeypatch.setitem(sys.modules, 'pplx_cli.ollama', fake_ollama(get_context_budget=lambda model: 4096, get_output_budget=lambda model: 1024))
     prompts = []
     def writer(prompt, **kwargs):
         prompts.append(prompt)
@@ -118,7 +130,7 @@ def test_default_ollama_rejects_web_before_search_and_verifies_compile(tmp_path,
     workspace.sync()
     monkeypatch.setattr('pplx_cli.wiki.workspace.Config.get_instance', lambda: types.SimpleNamespace(provider='ollama'))
     calls = []
-    monkeypatch.setitem(sys.modules, 'pplx_cli.ollama', types.SimpleNamespace(
+    monkeypatch.setitem(sys.modules, 'pplx_cli.ollama', fake_ollama(
         verify_model=lambda model: calls.append('verified'), get_context_budget=lambda model: 4096, get_output_budget=lambda model: 1024))
     monkeypatch.setattr(workspace, 'search', lambda *a, **k: pytest.fail('search must not run'))
     with pytest.raises(ValueError, match='Web research'):
@@ -143,7 +155,7 @@ def test_verbose_multibyte_summaries_are_bounded_and_small_context_rejected(tmp_
     workspace = WikiWorkspace(tmp_path, embedding_model=FakeEmbeddingModel())
     (tmp_path / 'source.txt').write_text('Vector evidence', encoding='utf-8')
     workspace.sync()
-    module = types.SimpleNamespace(get_context_budget=lambda model: 4096, get_output_budget=lambda model: 1024)
+    module = fake_ollama(get_context_budget=lambda model: 4096, get_output_budget=lambda model: 1024)
     monkeypatch.setitem(sys.modules, 'pplx_cli.ollama', module)
     prompts = []
     def writer(prompt, **kwargs):
@@ -169,7 +181,7 @@ def test_default_ollama_query_verifies_before_local_retrieval(tmp_path, monkeypa
     workspace = WikiWorkspace(tmp_path, embedding_model=FakeEmbeddingModel())
     monkeypatch.setattr('pplx_cli.wiki.workspace.Config.get_instance', lambda: types.SimpleNamespace(provider='ollama'))
     calls = []
-    monkeypatch.setitem(sys.modules, 'pplx_cli.ollama', types.SimpleNamespace(verify_model=lambda model: calls.append('verified')))
+    monkeypatch.setitem(sys.modules, 'pplx_cli.ollama', fake_ollama(verify_model=lambda model: calls.append('verified')))
     def search(*args, **kwargs):
         assert calls == ['verified'] and local_only_enabled()
         calls.append('search')
@@ -197,7 +209,7 @@ def test_damaged_source_page_never_generates_or_changes_files(tmp_path, monkeypa
     path.parent.mkdir()
     path.write_bytes(data)
     monkeypatch.setattr('pplx_cli.wiki.workspace.query_chat_completion', lambda *a, **k: pytest.fail('model called'))
-    with pytest.raises(ValueError, match='markers|codec'):
+    with pytest.raises(ValueError, match='markers|invalid UTF-8'):
         workspace.compile(provider="perplexity")
     assert path.read_bytes() == data
     assert source.read_bytes() == b'vector evidence'
@@ -337,7 +349,7 @@ def test_compiled_pages_include_exact_source_excerpts_and_locators_at_2048(tmp_p
         pages = [Page()]
     monkeypatch.setattr('pypdf.PdfReader', lambda path: Reader())
     assert workspace.sync()['indexed'] == 3
-    monkeypatch.setitem(sys.modules, 'pplx_cli.ollama', types.SimpleNamespace(
+    monkeypatch.setitem(sys.modules, 'pplx_cli.ollama', fake_ollama(
         get_context_budget=lambda model: 2048, get_output_budget=lambda model: 512))
     prompts = []
     def writer(prompt, **kwargs):
@@ -367,7 +379,7 @@ def test_local_query_uses_model_output_budget_at_2048(tmp_path, monkeypatch):
     (tmp_path / 'notes.txt').write_text('Vector evidence', encoding='utf-8')
     workspace.sync()
     monkeypatch.setattr(workspace, '_rerank', lambda *a: None)
-    monkeypatch.setitem(sys.modules, 'pplx_cli.ollama', types.SimpleNamespace(
+    monkeypatch.setitem(sys.modules, 'pplx_cli.ollama', fake_ollama(
         get_context_budget=lambda model: 2048, get_output_budget=lambda model: 512))
     monkeypatch.setattr('pplx_cli.wiki.workspace.query_chat_completion',
                         lambda prompt, **kwargs: ChatCompletion(content='Supported [L1]', model='fake'))
@@ -410,7 +422,7 @@ def test_source_marker_text_cannot_damage_managed_pages_on_recompile(tmp_path, m
                 workspace.GENERATED_END + '\nend').encode()
     source.write_bytes(original)
     workspace.sync()
-    monkeypatch.setitem(sys.modules, 'pplx_cli.ollama', types.SimpleNamespace(
+    monkeypatch.setitem(sys.modules, 'pplx_cli.ollama', fake_ollama(
         get_context_budget=lambda model: 4096, get_output_budget=lambda budget: 1024))
     monkeypatch.setattr('pplx_cli.wiki.workspace.query_chat_completion',
                         lambda *a, **kw: ChatCompletion(content='Supported [^source-1]', model='fake'))
@@ -443,7 +455,7 @@ def test_query_splits_large_evidence_and_returns_only_supplied_excerpt(tmp_path,
     source.write_bytes(raw)
     workspace.sync()
     monkeypatch.setattr(workspace, '_rerank', lambda *a: None)
-    monkeypatch.setitem(sys.modules, 'pplx_cli.ollama', types.SimpleNamespace(
+    monkeypatch.setitem(sys.modules, 'pplx_cli.ollama', fake_ollama(
         get_context_budget=lambda model: budget, get_output_budget=lambda context: output_budget))
     prompts = []
     def writer(prompt, **kwargs):
@@ -473,7 +485,7 @@ def test_overview_batches_short_summaries_from_multiple_sources(tmp_path, monkey
     (tmp_path / 'first.txt').write_text('First evidence', encoding='utf-8')
     (tmp_path / 'second.txt').write_text('Second evidence', encoding='utf-8')
     workspace.sync()
-    monkeypatch.setitem(sys.modules, 'pplx_cli.ollama', types.SimpleNamespace(
+    monkeypatch.setitem(sys.modules, 'pplx_cli.ollama', fake_ollama(
         get_context_budget=lambda model: 4096, get_output_budget=lambda budget: 1024))
     prompts = []
     def writer(prompt, **kwargs):
@@ -488,3 +500,41 @@ def test_overview_batches_short_summaries_from_multiple_sources(tmp_path, monkey
     overview_records = [json.loads(line) for line in prompts[-1].split('Evidence (JSON records):\n', 1)[1].splitlines()]
     assert {record['id'] for record in overview_records} == {'source-1', 'source-2'}
     assert len(prompts[-1].encode('utf-8')) <= 4096 - 1024
+
+
+@pytest.mark.parametrize('method', ['query', 'compile'])
+def test_nested_local_policy_rejects_hosted_before_any_work(tmp_path, monkeypatch, method):
+    from tests.test_wiki_workspace import FakeEmbeddingModel
+    from pplx_cli.local import local_only_mode
+    from pplx_cli.wiki import WikiWorkspace
+    workspace = WikiWorkspace(tmp_path, embedding_model=FakeEmbeddingModel())
+    monkeypatch.setattr(workspace, 'search', lambda *a, **kw: pytest.fail('retrieval ran'))
+    monkeypatch.setattr(workspace, '_source_rows', lambda *a, **kw: pytest.fail('source read ran'))
+    monkeypatch.setattr('pplx_cli.wiki.workspace.query_chat_completion', lambda *a, **kw: pytest.fail('writer ran'))
+    with local_only_mode(), pytest.raises(ValueError, match='Local-only mode requires'):
+        if method == 'query':
+            workspace.query('question', provider='perplexity')
+        else:
+            workspace.compile(provider='perplexity')
+    assert list(workspace.wiki_dir.iterdir()) == []
+
+
+@pytest.mark.parametrize('method', ['query', 'compile'])
+def test_nested_local_scope_still_verifies_operation_before_retrieval(tmp_path, monkeypatch, method):
+    import sys
+    from tests.test_wiki_workspace import FakeEmbeddingModel
+    from pplx_cli.local import local_only_mode
+    from pplx_cli.wiki import WikiWorkspace
+    workspace = WikiWorkspace(tmp_path, embedding_model=FakeEmbeddingModel())
+    calls = []
+    monkeypatch.setitem(sys.modules, 'pplx_cli.ollama', fake_ollama(verify_model=lambda model: calls.append(('verified', model))))
+    def search(*args, **kwargs):
+        assert calls == [('verified', 'local-model')]
+        return []
+    monkeypatch.setattr(workspace, 'search', search)
+    monkeypatch.setattr(workspace, '_source_rows', search)
+    with local_only_mode(), pytest.raises(ValueError, match='No local evidence|No sources are indexed'):
+        if method == 'query':
+            workspace.query('question', provider='ollama', model='local-model')
+        else:
+            workspace.compile(provider='ollama', model='local-model')
