@@ -85,16 +85,44 @@ def _models(session):
     return models
 
 
+class _IneligibleModel(OllamaError):
+    """An installed model is explicitly non-chat or cloud-routed."""
+
+
+def _check_remote_markers(obj, model):
+    # Local models omit these optional fields in current Ollama responses.
+    # Nonempty values identify remote routing; unexpected types are unverifiable.
+    # https://github.com/ollama/ollama/blob/main/api/types.go
+    for field in ("remote_model", "remote_host"):
+        if field in obj:
+            value = obj[field]
+            if not isinstance(value, str):
+                raise OllamaError(f"Malformed Ollama {field} metadata for {model!r}")
+            if value:
+                raise _IneligibleModel(f"Ollama model {model!r} is cloud-routed and cannot be used locally")
+
+
+def _model_context(info):
+    model_info = info.get("model_info")
+    if not isinstance(model_info, dict):
+        raise OllamaError("Ollama model context metadata is unavailable; upgrade the daemon or select a compatible model")
+    values = [value for key, value in model_info.items()
+              if isinstance(key, str) and key.endswith(".context_length")]
+    if not values or any(isinstance(value, bool) or not isinstance(value, int) or value < 1024 for value in values):
+        raise OllamaError("Ollama model context metadata is missing or malformed")
+    return min(values)
+
+
 def _show(session, model, entry):
+    _check_remote_markers(entry, model)
     info = _request(session, "POST", "/api/show", body={"model": model})
+    _check_remote_markers(info, model)
     capabilities = info.get("capabilities")
     if not isinstance(capabilities, list) or not all(isinstance(c, str) for c in capabilities):
         raise OllamaError("Ollama model capabilities are unavailable; upgrade the daemon")
     if "completion" not in capabilities:
-        raise OllamaError(f"Ollama model {model!r} is not chat-capable")
-    for obj in (entry, info):
-        if obj.get("remote_model") or obj.get("remote_host"):
-            raise OllamaError(f"Ollama model {model!r} is cloud-routed and cannot be used locally")
+        raise _IneligibleModel(f"Ollama model {model!r} is not chat-capable")
+    _model_context(info)
     return info
 
 
@@ -106,7 +134,7 @@ def list_chat_models():
         for entry in _models(session):
             try:
                 _show(session, entry["name"], entry)
-            except OllamaError:
+            except _IneligibleModel:
                 continue
             result.append(entry["name"])
         return result
@@ -120,7 +148,7 @@ def _verify(session, model):
                (":" not in model and item["name"] == model + ":latest")]
     if not matches:
         raise OllamaError(f"Ollama model {model!r} is not installed. Install it explicitly with 'ollama pull {model}' and retry.")
-    _show(session, model, matches[0])
+    return _show(session, model, matches[0])
 
 
 def verify_model(model=None):
@@ -133,18 +161,30 @@ def verify_model(model=None):
 
 
 def get_context_budget(model=None):
-    """Configured context window in tokens; the generation request enforces it."""
-    return _settings()[2]
+    """Return the configured window capped to the verified model's context limit."""
+    model = model or Config.get_instance().get_default_model(Provider.OLLAMA)
+    if not isinstance(model, str) or not model:
+        raise OllamaError("No Ollama model configured; run 'perplexity setup --provider ollama'.")
+    with _session() as session:
+        info = _verify(session, model)
+    return min(_settings()[2], _model_context(info))
+
+
+def get_output_budget(model=None):
+    """Reserve at most one quarter of the context for generated tokens."""
+    return min(1024, get_context_budget(model) // 4)
 
 
 def chat(messages, model=None):
     model = model or Config.get_instance().get_default_model(Provider.OLLAMA)
-    if not model:
+    if not isinstance(model, str) or not model:
         raise OllamaError("No Ollama model configured; run 'perplexity setup --provider ollama'.")
     with _session() as session:
-        _verify(session, model)
+        info = _verify(session, model)
+        context = min(_settings()[2], _model_context(info))
         payload = _request(session, "POST", "/api/chat", body={"model": model, "messages": messages,
-                           "stream": False, "options": {"num_ctx": get_context_budget(model)}})
+                           "stream": False, "options": {"num_ctx": context,
+                           "num_predict": min(1024, context // 4)}})
     message = payload.get("message")
     if not isinstance(message, dict) or not isinstance(message.get("content"), str):
         raise OllamaError("Malformed Ollama chat response")

@@ -23,7 +23,7 @@ def register(mock, status=None, tags=None, show=None):
     root = "http://127.0.0.1:11434"
     mock.get(root + "/api/status", json=status if status is not None else {"cloud": {"disabled": True}})
     mock.get(root + "/api/tags", json=tags if tags is not None else {"models": [{"name": "test:latest"}]})
-    mock.post(root + "/api/show", json=show if show is not None else {"capabilities": ["completion"]})
+    mock.post(root + "/api/show", json=show if show is not None else {"capabilities": ["completion"], "model_info": {"test.context_length": 16384}})
     mock.post(root + "/api/chat", json={"model": "test:latest", "message": {"content": "answer"}})
 
 
@@ -95,6 +95,7 @@ def test_cli_verifies_before_constructing_workspace(setup_ollama, monkeypatch):
     result = CliRunner().invoke(app, ["wiki", "query", "private", "--dir", "/tmp", "--provider", "ollama", "--model", "test"])
     assert result.exit_code != 0
     assert events == ["verify"]
+    assert "Ollama error: unverified" in result.output
 
 
 def test_cli_workspace_runs_inside_local_policy(setup_ollama, monkeypatch):
@@ -118,3 +119,66 @@ def test_cli_rejects_web_before_verification(setup_ollama, monkeypatch):
     result = CliRunner().invoke(app, ["wiki", "query", "private", "--dir", "/tmp", "--provider", "ollama", "--web"])
     assert result.exit_code != 0
     assert "--web is unavailable" in result.output
+
+
+@pytest.mark.parametrize("marker", [[], {}, True, None, 42])
+def test_malformed_remote_markers_fail_closed(setup_ollama, requests_mock, marker):
+    register(requests_mock, tags={"models": [{"name": "test:latest", "remote_host": marker}]})
+    with pytest.raises(OllamaError, match="Malformed Ollama remote_host"):
+        verify_model("test")
+    assert [r.path for r in requests_mock.request_history] == ["/api/status", "/api/tags"]
+
+
+def test_discovery_skips_cloud_without_show_and_propagates_malformed(setup_ollama, requests_mock):
+    from pplx_cli.ollama import list_chat_models
+    register(requests_mock, tags={"models": [{"name": "cloud:latest", "remote_host": "cloud.invalid"}, {"name": "test:latest"}]}, show={"capabilities": "invalid"})
+    with pytest.raises(OllamaError, match="capabilities"):
+        list_chat_models()
+    shows = [r.json()["model"] for r in requests_mock.request_history if r.path == "/api/show"]
+    assert shows == ["test:latest"]
+
+
+def test_context_clamps_to_model_and_bounds_output(setup_ollama, requests_mock):
+    from pplx_cli.ollama import get_context_budget, get_output_budget
+    config.save_ollama_settings("http://127.0.0.1:11434", "test", context=8192)
+    register(requests_mock, show={"capabilities": ["completion"], "model_info": {"test.context_length": 2048}})
+    assert get_context_budget("test") == 2048
+    assert get_output_budget("test") == 512
+    query_chat_completion("private", model="test", provider=Provider.OLLAMA)
+    assert requests_mock.last_request.json()["options"] == {"num_ctx": 2048, "num_predict": 512}
+
+
+@pytest.mark.parametrize("model_info", [None, {}, {"test.context_length": "4096"}, {"test.context_length": True}])
+def test_missing_model_context_fails_before_prompt(setup_ollama, requests_mock, model_info):
+    register(requests_mock, show={"capabilities": ["completion"], "model_info": model_info})
+    with pytest.raises(OllamaError, match="context metadata"):
+        query_chat_completion("secret", model="test", provider=Provider.OLLAMA)
+    assert all(r.path != "/api/chat" for r in requests_mock.request_history)
+
+
+def test_cli_lists_verified_models_and_saved_default(setup_ollama, monkeypatch):
+    from typer.testing import CliRunner
+    from pplx_cli.cli import app
+    config.save_ollama_settings("http://127.0.0.1:11434", "saved", make_default=False)
+    monkeypatch.setattr("pplx_cli.cli.list_chat_models", lambda: ["test:latest"])
+    result = CliRunner().invoke(app, ["list-models", "--provider", "ollama"])
+    assert result.exit_code == 0
+    assert "saved" in result.output and "test:latest" in result.output
+
+
+@pytest.mark.parametrize("arguments", [
+    ["ask", "private", "--no-save-history"],
+    ["ask-notes", "private"],
+    ["wiki", "query", "private", "--dir", "/tmp"],
+    ["wiki", "compile", "--dir", "/tmp"],
+])
+def test_cli_verification_failure_is_actionable(setup_ollama, monkeypatch, arguments):
+    from typer.testing import CliRunner
+    from pplx_cli.cli import app
+    def fail(model):
+        raise OllamaError("Start the daemon with cloud disabled")
+    monkeypatch.setattr("pplx_cli.cli.verify_model", fail)
+    result = CliRunner().invoke(app, arguments + ["--provider", "ollama", "--model", "test"])
+    assert result.exit_code == 1
+    assert "Start the daemon with cloud disabled" in result.output
+    assert "Traceback" not in result.output
