@@ -166,7 +166,7 @@ def verify_model(model=None):
 
 
 def get_context_budget(model=None):
-    """Return the configured window capped to the verified model's context limit."""
+    """Verify the daemon/model and return the configured, model-capped window."""
     model = model or Config.get_instance().get_default_model(Provider.OLLAMA)
     if not isinstance(model, str) or not model:
         raise OllamaError("No Ollama model configured; run 'perplexity setup --provider ollama'.")
@@ -187,9 +187,23 @@ def chat(messages, model=None):
     with _session() as session:
         info = _verify(session, model)
         context = min(_settings()[2], _model_context(info))
+        output_budget = min(1024, context // 4)
+        # UTF-8 bytes provide a conservative token estimate for ordinary
+        # byte-based tokenizers, with room for role/template framing.
+        input_budget = sum(len(item["content"].encode("utf-8")) + 32 for item in messages)
+        if input_budget + output_budget > context:
+            raise OllamaError(
+                "Input is too large for the configured Ollama context and output reserve. "
+                "Shorten the question or evidence, or increase the configured context within the model limit."
+            )
         payload = _request(session, "POST", "/api/chat", body={"model": model, "messages": messages,
                            "stream": False, "options": {"num_ctx": context,
-                           "num_predict": min(1024, context // 4)}})
+                           "num_predict": output_budget}})
+    if payload.get("done_reason") == "length":
+        raise OllamaError(
+            "Ollama reached the generation limit and returned an incomplete response. "
+            "Ask for a shorter answer or split the request into smaller parts."
+        )
     message = payload.get("message")
     if not isinstance(message, dict) or not isinstance(message.get("content"), str):
         raise OllamaError("Malformed Ollama chat response")
