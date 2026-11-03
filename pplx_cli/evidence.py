@@ -70,6 +70,39 @@ def split_evidence(item: Evidence, question: str, context_tokens: int,
     return parts or [item]
 
 
+def _without_code(text: str) -> str:
+    """Remove only closed Markdown code blocks and same-line code spans."""
+    lines = text.splitlines(keepends=True)
+    kept = []
+    i = 0
+    while i < len(lines):
+        opening = re.match(r"^ {0,3}(`{3,}|~{3,})[^\n\r]*\r?\n?$", lines[i])
+        if opening:
+            delimiter = opening.group(1)
+            closing = re.compile(r"^ {0,3}" + re.escape(delimiter) + r"[ \t]*\r?\n?$")
+            end = next((j for j in range(i + 1, len(lines)) if closing.fullmatch(lines[j])), None)
+            if end is not None:
+                i = end + 1
+                continue
+        line = lines[i]
+        runs = list(re.finditer(r"`+", line))
+        cursor = 0
+        run_index = 0
+        while run_index < len(runs):
+            start = runs[run_index]
+            match_index = next((j for j in range(run_index + 1, len(runs))
+                                if runs[j].group() == start.group()), None)
+            if match_index is None:
+                run_index += 1
+                continue
+            kept.append(line[cursor:start.start()])
+            cursor = runs[match_index].end()
+            run_index = match_index + 1
+        kept.append(line[cursor:])
+        i += 1
+    return "".join(kept)
+
+
 def grounded_answer(question: str, evidence: Sequence[Evidence], writer: Callable[[str], str],
                     context_tokens: int = 8192, output_tokens: int = 1024,
                     footnotes: bool = False) -> GroundedAnswer:
@@ -103,7 +136,7 @@ def grounded_answer(question: str, evidence: Sequence[Evidence], writer: Callabl
 
     def invalid(answer: str) -> bool:
         # Code spans and Markdown links are not citations.
-        prose = re.sub(r"(`+).*?\1", "", answer, flags=re.S)
+        prose = _without_code(answer)
         ids = pattern.findall(prose)
         return bool(set(ids) - allowed) or (not ids and answer.strip().lower().rstrip('.') != 'insufficient evidence')
 
