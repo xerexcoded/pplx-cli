@@ -147,7 +147,9 @@ def test_context_clamps_to_model_and_bounds_output(setup_ollama, requests_mock):
     config.save_ollama_settings("http://127.0.0.1:11434", "test", context=8192)
     register(requests_mock, show={"capabilities": ["completion"], "model_info": {"test.context_length": 2048}})
     assert get_context_budget("test") == 2048
-    assert get_output_budget("test") == 512
+    request_count = len(requests_mock.request_history)
+    assert get_output_budget(2048) == 512
+    assert len(requests_mock.request_history) == request_count
     query_chat_completion("private", model="test", provider=Provider.OLLAMA)
     assert requests_mock.last_request.json()["options"] == {"num_ctx": 2048, "num_predict": 512}
 
@@ -311,3 +313,10 @@ def test_discovery_rejects_malformed_capabilities(setup_ollama, requests_mock):
     register(requests_mock, show={"capabilities": "completion", "model_info": {"x.context_length": 4096}})
     with pytest.raises(OllamaError, match="capabilities are unavailable"):
         list_chat_models()
+
+
+@pytest.mark.parametrize("context", [True, 1023, 4096.0, "4096", None])
+def test_output_budget_rejects_invalid_context(context):
+    from pplx_cli.ollama import get_output_budget
+    with pytest.raises(ValueError, match="Context window"):
+        get_output_budget(context)
