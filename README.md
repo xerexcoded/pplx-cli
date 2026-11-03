@@ -1,6 +1,6 @@
 # Perplexity CLI
 
-A command-line interface for Perplexity, NVIDIA NIM, and OpenRouter with local notes, evidence-first RAG, and a Markdown-compatible LLM Wiki. Search notes, chat history, and curated research sources without giving up source provenance.
+A command-line interface for Perplexity, NVIDIA NIM, OpenRouter, and local Ollama models with local notes, evidence-first RAG, and a Markdown-compatible LLM Wiki. Search notes, chat history, and curated research sources without giving up source provenance.
 
 ## 🚀 Key Features
 
@@ -56,6 +56,44 @@ perplexity rag "machine learning concepts"
 ```
 
 ## 🔍 Fast RAG System - Your Personal Knowledge Assistant
+
+### Local research with Ollama
+
+Start Ollama explicitly with cloud features disabled, then configure the CLI:
+
+```sh
+OLLAMA_NO_CLOUD=1 ollama serve
+# In another terminal, with an already installed chat model:
+perplexity setup --provider ollama
+```
+
+Setup checks the daemon, lists installed local chat models, and saves your selected endpoint, model, context and timeout. Choose whether to make Ollama the default; existing provider defaults otherwise stay unchanged. A compatible daemon must report its cloud-disabled state and model context metadata. Older or unverifiable versions fail with an actionable error. Ollama 0.35.1 was used for local verification.
+
+Prepare retrieval models as an explicit download step. The `small` BGE model is useful for a first local workspace:
+
+```sh
+perplexity rag-config --embedding-provider local --model small
+perplexity prepare-models
+# Optional, explicitly download the reranker too:
+perplexity prepare-models --include-reranker
+```
+
+With Ollama selected as the default, local indexing and note creation also require cached models. Queries never download missing models, start services, switch embedding models, or fall back to a hosted provider. An unavailable optional reranker visibly falls back to hybrid retrieval.
+
+```sh
+perplexity wiki init --dir ~/research
+perplexity wiki sync --dir ~/research
+perplexity wiki query "Why did we choose SQLite?" --dir ~/research --provider ollama
+perplexity ask-notes "What did we decide?" --provider ollama
+perplexity wiki compile --dir ~/research --provider ollama
+perplexity ask "Explain SQLite WAL briefly" --provider ollama --no-save-history
+```
+
+Wiki inputs include `.md`, `.markdown`, `.txt`, text PDFs, and previously captured web sources. Notes and wiki collections remain separate. Source-backed local answers show inline references and supplied excerpts; omitted evidence is disclosed. Invalid references get one correction attempt, then an error with evidence. Reference validation does not prove the semantic correctness of every claim.
+
+Ollama mode rejects live web research, remote embeddings, remote model routing, and non-loopback endpoints. Live URL capture is rejected while Ollama is the default; previously captured snapshots remain usable. Context and output are bounded; an incomplete response raises an explicit error. The application verifies daemon-reported policy, with OS-level network isolation outside its scope.
+
+See the [development setup](docs/development.md), [agreed design](docs/design/ollama-local-research.md), and explicit real-model check in `scripts/verify-local-research.py`.
 
 The RAG system transforms your CLI into a **powerful personal knowledge assistant** that can instantly search through all your notes and conversations. This is the **most important feature** of the CLI - it makes all your accumulated knowledge instantly searchable and actionable.
 

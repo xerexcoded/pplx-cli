@@ -1,6 +1,6 @@
 # Ollama local research
 
-Status: design confirmed by the user on 2026-11-03. Implementation has not started.
+Status: design confirmed by the user on 2026-11-03; implementation and validation tracked in [KAC-147](https://linear.app/kachal/issue/KAC-147/ship-ollama-powered-local-cited-research).
 
 ## Goal
 

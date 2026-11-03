@@ -77,3 +77,24 @@ def test_preparation_is_explicit_and_reports_models(local_cli, monkeypatch):
     assert result.exit_code == 0, result.output
     assert requested == [True]
     assert "Prepared: BGE" in result.output
+
+
+@pytest.mark.parametrize("arguments", [["wiki", "init"], ["wiki", "sync"], ["wiki", "search", "question"], ["wiki", "ingest", "source.txt"]])
+def test_default_local_indexing_never_starts_outside_cache_policy(local_cli, monkeypatch, arguments):
+    from pplx_cli.local import local_only_enabled
+    runner, directory = local_cli
+    def inspect_policy(path):
+        assert local_only_enabled()
+        raise RuntimeError("cache policy checked")
+    monkeypatch.setattr("pplx_cli.cli._wiki_workspace", inspect_policy)
+    result = runner.invoke(app, arguments + ["--dir", str(directory)])
+    assert result.exit_code == 1
+    assert "cache policy checked" in result.output
+
+
+def test_default_local_ingest_rejects_live_urls_before_models(local_cli, monkeypatch):
+    runner, directory = local_cli
+    monkeypatch.setattr("pplx_cli.cli._wiki_workspace", lambda path: pytest.fail("must reject before workspace access"))
+    result = runner.invoke(app, ["wiki", "ingest", "https://example.com/article", "--dir", str(directory)])
+    assert result.exit_code == 2
+    assert "Live URL capture" in result.output

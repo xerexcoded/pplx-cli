@@ -1,5 +1,6 @@
 import typer
 from contextlib import contextmanager
+from functools import wraps
 from typer.core import TyperGroup
 from typing import List, Optional, Union
 import getpass
@@ -7,7 +8,7 @@ import sys
 import platform
 import json
 from .api import query_chat
-from .local import local_only_mode
+from .local import local_only_mode, local_only_enabled
 from .ollama import (
     OllamaError, verify_model, list_chat_models, temporary_settings,
     get_context_budget, get_output_budget,
@@ -271,6 +272,15 @@ def _verify_local_model(model):
         typer.echo(f"Ollama error: {error}", err=True)
         raise typer.Exit(code=1) from error
 
+
+def _local_default_command(command):
+    """Apply the saved local policy to source commands without a provider flag."""
+    @wraps(command)
+    def run(*args, **kwargs):
+        with local_only_mode(Config.get_instance().provider == Provider.OLLAMA), _ollama_errors():
+            return command(*args, **kwargs)
+    return run
+
 @app.command()
 def ask(
     query: str = typer.Argument(..., help="The question to ask the selected AI provider"),
@@ -396,6 +406,7 @@ def version():
     typer.echo(f"Perplexity CLI version {version_str}")
 
 @app.command()
+@_local_default_command
 def note(
     title: str = typer.Option(..., "--title", help="Title of the note"),
     content: str = typer.Option(..., "--content", help="Content of the note"),
@@ -1084,6 +1095,7 @@ def _print_wiki_results(results) -> None:
 
 
 @wiki_app.command("init")
+@_local_default_command
 def wiki_init(
     directory: Path = typer.Option(..., "--dir", help="Directory that will hold source files, wiki/, and .pplx/")
 ):
@@ -1095,12 +1107,15 @@ def wiki_init(
 
 
 @wiki_app.command("ingest")
+@_local_default_command
 def wiki_ingest(
-    sources: List[str] = typer.Argument(..., help="Markdown/PDF file, directory, or HTTP(S) URL"),
+    sources: List[str] = typer.Argument(..., help="Markdown/text/PDF file, directory, or HTTP(S) URL"),
     directory: Path = typer.Option(..., "--dir", help="Initialized wiki workspace directory"),
     tag: Optional[List[str]] = typer.Option(None, "--tag", help="Tag source metadata for later filtering"),
 ):
-    """Ingest Markdown, text PDFs, or a captured web page into the local index."""
+    """Ingest local documents or explicitly capture a web page."""
+    if local_only_enabled() and any(source.lower().startswith(("http://", "https://")) for source in sources):
+        raise typer.BadParameter("Live URL capture is unavailable while Ollama is the default local-only provider. Use already captured sources or an explicitly online configuration.")
     workspace = _wiki_workspace(directory)
     failed = False
     for source in sources:
@@ -1118,6 +1133,7 @@ def wiki_ingest(
 
 
 @wiki_app.command("sync")
+@_local_default_command
 def wiki_sync(
     directory: Path = typer.Option(..., "--dir", help="Initialized wiki workspace directory")
 ):
@@ -1131,6 +1147,7 @@ def wiki_sync(
 
 
 @wiki_app.command("watch")
+@_local_default_command
 def wiki_watch(
     directory: Path = typer.Option(..., "--dir", help="Initialized wiki workspace directory"),
     interval: float = typer.Option(1.0, "--interval", min=0.2, help="Polling debounce in seconds"),
@@ -1172,11 +1189,12 @@ def wiki_compile(
 
 
 @wiki_app.command("search")
+@_local_default_command
 def wiki_search(
     query: str = typer.Argument(..., help="Search query"),
     directory: Path = typer.Option(..., "--dir", help="Initialized wiki workspace directory"),
     limit: int = typer.Option(10, "--limit", min=1, max=50),
-    source_type: Optional[List[str]] = typer.Option(None, "--source-type", help="Restrict to markdown, pdf, or web"),
+    source_type: Optional[List[str]] = typer.Option(None, "--source-type", help="Restrict to markdown, text, pdf, or web"),
     tag: Optional[List[str]] = typer.Option(None, "--tag", help="Require source metadata tags"),
 ):
     """Run fast hybrid search over authoritative wiki sources."""
