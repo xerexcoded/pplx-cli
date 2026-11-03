@@ -394,3 +394,34 @@ def test_adjacent_unknown_letter_citation_triggers_repair():
     result = grounded_answer('Q?', [Evidence('L1', 'loc', 'text')], writer)
     assert result.content == 'Claim[L1]; arr[0].'
     assert len(prompts) == 2
+
+
+def test_source_marker_text_cannot_damage_managed_pages_on_recompile(tmp_path, monkeypatch):
+    import sys
+    import types
+    from tests.test_wiki_workspace import FakeEmbeddingModel
+    from pplx_cli.api import ChatCompletion
+    from pplx_cli.local import local_only_mode
+    from pplx_cli.wiki import WikiWorkspace
+    workspace = WikiWorkspace(tmp_path, embedding_model=FakeEmbeddingModel())
+    source = tmp_path / 'notes.txt'
+    original = ('Source text\n' + workspace.GENERATED_START + '\ninside\n' +
+                workspace.GENERATED_END + '\nend').encode()
+    source.write_bytes(original)
+    workspace.sync()
+    monkeypatch.setitem(sys.modules, 'pplx_cli.ollama', types.SimpleNamespace(
+        get_context_budget=lambda model: 4096, get_output_budget=lambda budget: 1024))
+    monkeypatch.setattr('pplx_cli.wiki.workspace.query_chat_completion',
+                        lambda *a, **kw: ChatCompletion(content='Supported [^source-1]', model='fake'))
+    with local_only_mode():
+        pages = workspace.compile(provider='ollama')
+    for page in pages:
+        page.write_text(page.read_text(encoding='utf-8') + '\nManual sentinel.\n', encoding='utf-8')
+    with local_only_mode():
+        workspace.compile(provider='ollama')
+    for page in pages:
+        content = page.read_text(encoding='utf-8')
+        assert content.count(workspace.GENERATED_START) == 1
+        assert content.count(workspace.GENERATED_END) == 1
+        assert content.count('Manual sentinel.') == 1
+    assert source.read_bytes() == original
