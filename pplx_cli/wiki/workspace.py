@@ -14,7 +14,7 @@ import math
 import re
 import sqlite3
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -833,18 +833,25 @@ class WikiWorkspace:
         omitted = 0
         if local:
             from ..ollama import get_context_budget, get_output_budget
-            items = [Evidence(f"L{result.source_id}", result.citation, result.content) for result in results]
             completions = []
             def writer(prompt: str) -> str:
                 completion = query_chat_completion(prompt, provider=provider, model=model)
                 completions.append(completion)
                 return completion.content
             budget = get_context_budget(model)
+            output_budget = get_output_budget(budget)
+            fragments = []
+            for result in results:
+                evidence = Evidence(f"L{result.source_id}", result.citation, result.content)
+                fragments.extend((part, replace(result, content=part.excerpt)) for part in
+                                 split_evidence(evidence, question, budget, output_tokens=output_budget))
+            items = [part for part, _ in fragments]
             answer = grounded_answer(question, items, writer, context_tokens=budget,
-                                     output_tokens=get_output_budget(budget))
+                                     output_tokens=output_budget)
             local_completion = completions[-1]
             omitted = answer.omitted
-            results = [result for result, item in zip(results, items) if item in answer.evidence]
+            included = {id(item) for item in answer.evidence}
+            results = [result for item, result in fragments if id(item) in included]
         else:
             local_completion = query_chat_completion(
                 f"Question: {question}\n\nLocal evidence:\n{evidence}",
