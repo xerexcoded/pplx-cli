@@ -320,3 +320,24 @@ def test_output_budget_rejects_invalid_context(context):
     from pplx_cli.ollama import get_output_budget
     with pytest.raises(ValueError, match="Context window"):
         get_output_budget(context)
+
+
+def test_operation_snapshots_endpoint_timeout_and_context(setup_ollama, requests_mock, monkeypatch):
+    from pplx_cli import ollama
+    state = {"endpoint": "http://127.0.0.1:11434", "timeout": 123, "context": 4096}
+    reads = []
+    def settings():
+        reads.append(True)
+        return dict(state)
+    monkeypatch.setattr(ollama, "load_ollama_settings", settings)
+    register(requests_mock)
+    def change_settings(request, response):
+        state.update(endpoint="http://127.0.0.2:11434", timeout=1, context=1024)
+        return {"cloud": {"disabled": True}}
+    requests_mock.get("http://127.0.0.1:11434/api/status", json=change_settings)
+    result = query_chat_completion("private", model="test", provider=Provider.OLLAMA)
+    assert result.content == "answer"
+    assert len(reads) == 1
+    assert [r.path for r in requests_mock.request_history] == ["/api/status", "/api/tags", "/api/show", "/api/chat"]
+    assert all(r.hostname == "127.0.0.1" and r.timeout == 123 for r in requests_mock.request_history)
+    assert requests_mock.last_request.json()["options"]["num_ctx"] == 4096

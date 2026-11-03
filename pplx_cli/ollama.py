@@ -55,7 +55,7 @@ def _settings():
 
 
 def _request(session, method, path, *, body=None):
-    endpoint, timeout, _ = _settings()
+    endpoint, timeout, _ = session._pplx_settings
     try:
         response = session.request(method, endpoint + path, json=body, timeout=timeout,
                                    allow_redirects=False)
@@ -70,7 +70,9 @@ def _request(session, method, path, *, body=None):
 
 
 def _session():
+    settings = _settings()
     session = requests.Session()
+    session._pplx_settings = settings
     session.trust_env = False
     return session
 
@@ -181,7 +183,7 @@ def get_context_budget(model=None):
         raise OllamaError("No Ollama model configured; run 'perplexity setup --provider ollama'.")
     with _session() as session:
         _, info = _verify(session, model)
-    return min(_settings()[2], _model_context(info))
+        return min(session._pplx_settings[2], _model_context(info))
 
 
 def get_output_budget(context_tokens):
@@ -197,7 +199,7 @@ def chat(messages, model=None):
         raise OllamaError("No Ollama model configured; run 'perplexity setup --provider ollama'.")
     with _session() as session:
         model, info = _verify(session, model)
-        context = min(_settings()[2], _model_context(info))
+        context = min(session._pplx_settings[2], _model_context(info))
         output_budget = get_output_budget(context)
         # UTF-8 bytes provide a conservative token estimate for ordinary
         # byte-based tokenizers, with room for role/template framing.
