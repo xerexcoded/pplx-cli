@@ -131,7 +131,7 @@ def grounded_answer(question: str, evidence: Sequence[Evidence], writer: Callabl
     if not included:
         raise CitationError("No evidence fits in the model context budget.", evidence)
     prompt = prefix + ''.join(blocks)
-    pattern = re.compile(r'\[\^([^\]\s]+)\]' if footnotes else r'\[((?:L|N)[A-Za-z0-9_-]*|source-[A-Za-z0-9_-]*)\](?!\()')
+    pattern = re.compile(r'\[\^([^\]\s]+)\]' if footnotes else r'(?<![\w])\[((?:[A-Za-z][A-Za-z0-9_-]*\d[A-Za-z0-9_-]*|\d+|(?:L|N)[A-Za-z0-9_-]*|source-[A-Za-z0-9_-]*))\](?!\()')
     allowed = {item.id for item in included}
 
     def invalid(answer: str) -> bool:
