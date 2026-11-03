@@ -30,7 +30,7 @@ def reset_config_singleton():
     Config._instance = None
 
 
-@pytest.mark.parametrize("provider", list(Provider))
+@pytest.mark.parametrize("provider", [p for p in Provider if p != Provider.OLLAMA])
 def test_load_api_key_from_provider_environment(monkeypatch, temp_config_dir, provider):
     settings = get_provider_settings(provider)
     monkeypatch.setenv(settings.environment_variable, f"{provider.value}-env-key")

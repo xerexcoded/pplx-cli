@@ -30,6 +30,7 @@ class Provider(str, Enum):
     PERPLEXITY = "perplexity"
     NVIDIA = "nvidia"
     OPENROUTER = "openrouter"
+    OLLAMA = "ollama"
 
 
 @dataclass(frozen=True)
@@ -43,6 +44,7 @@ class ProviderSettings:
 
 
 PROVIDER_SETTINGS = {
+    Provider.OLLAMA: ProviderSettings("Ollama", "http://127.0.0.1:11434", "", ""),
     Provider.PERPLEXITY: ProviderSettings(
         display_name="Perplexity",
         api_endpoint="https://api.perplexity.ai/chat/completions",
@@ -103,10 +105,10 @@ def _read_config() -> dict:
     if isinstance(legacy_api_key, str) and legacy_api_key:
         api_keys.setdefault(Provider.PERPLEXITY.value, legacy_api_key)
 
-    return {
-        "provider": data.get("provider", Provider.PERPLEXITY.value),
-        "api_keys": api_keys,
-    }
+    data.pop("api_key", None)
+    data["provider"] = data.get("provider", Provider.PERPLEXITY.value)
+    data["api_keys"] = api_keys
+    return data
 
 
 def load_default_provider() -> Provider:
@@ -123,7 +125,7 @@ def load_api_key(provider: Union[Provider, str] = Provider.PERPLEXITY) -> Option
     selected_provider = normalize_provider(provider)
     settings = get_provider_settings(selected_provider)
 
-    api_key = os.getenv(settings.environment_variable)
+    api_key = os.getenv(settings.environment_variable) if settings.environment_variable else None
     if api_key:
         return api_key
 
@@ -141,15 +143,31 @@ def save_api_key(
     api_keys = config.get("api_keys", {})
     api_keys[selected_provider.value] = api_key
 
+    config["provider"] = selected_provider.value
+    config["api_keys"] = api_keys
+    _write_config(config)
+
+def _write_config(config: dict) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     with open(CONFIG_FILE, "w", encoding="utf-8") as config_file:
-        json.dump(
-            {"provider": selected_provider.value, "api_keys": api_keys},
-            config_file,
-        )
-
-    # API keys must only be readable by the current user.
+        json.dump(config, config_file)
     CONFIG_FILE.chmod(0o600)
+
+
+def load_ollama_settings() -> dict:
+    data = _read_config().get("ollama", {})
+    return data if isinstance(data, dict) else {}
+
+
+def save_ollama_settings(endpoint: str, model: str, timeout: float = 300,
+                         context: int = 4096, make_default: bool = True) -> None:
+    if timeout <= 0 or context < 1024 or not model:
+        raise ValueError("Ollama requires a model, a positive timeout and context of at least 1024")
+    config = _read_config()
+    config["ollama"] = {"endpoint": endpoint, "model": model, "timeout": timeout, "context": context}
+    if make_default:
+        config["provider"] = Provider.OLLAMA.value
+    _write_config(config)
 
 
 def get_version() -> str:
@@ -219,9 +237,13 @@ class Config:
         return load_api_key(selected_provider)
 
     def get_api_endpoint(self, provider: Union[Provider, str]) -> str:
+        if normalize_provider(provider) == Provider.OLLAMA:
+            return load_ollama_settings().get("endpoint", "http://127.0.0.1:11434")
         return get_provider_settings(provider).api_endpoint
 
     def get_default_model(self, provider: Union[Provider, str]) -> str:
+        if normalize_provider(provider) == Provider.OLLAMA:
+            return load_ollama_settings().get("model", "")
         return get_provider_settings(provider).default_model
 
     @property
