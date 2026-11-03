@@ -251,7 +251,8 @@ def test_bracket_prose_links_and_code_do_not_count_as_citations():
     assert '[L1]' in answer.content
 
 
-def test_optional_reranker_runtime_failure_preserves_hybrid_scores(tmp_path, monkeypatch, caplog):
+@pytest.mark.parametrize("failure", [RuntimeError, TypeError])
+def test_optional_reranker_runtime_failure_preserves_hybrid_scores(tmp_path, monkeypatch, caplog, failure):
     import sys
     import types
     from tests.test_wiki_workspace import FakeEmbeddingModel
@@ -262,8 +263,25 @@ def test_optional_reranker_runtime_failure_preserves_hybrid_scores(tmp_path, mon
     results = workspace.search('vector')
     before = [result.score for result in results]
     def fail(*args, **kwargs):
-        raise RuntimeError('model unavailable')
+        raise failure('model unavailable')
     monkeypatch.setitem(sys.modules, 'sentence_transformers', types.SimpleNamespace(CrossEncoder=fail))
     workspace._rerank('vector', results)
     assert [result.score for result in results] == before
     assert 'using hybrid ranking' in caplog.text
+
+
+@pytest.mark.parametrize('answer', [
+    'Valid [L1] and stray `\n\nInvalid [L99] followed by `.',
+    'Valid [L1] `unmatched `` Invalid [L99]',
+    'Valid [L1]\n```python\nUnclosed fence\nInvalid [L99]',
+    'Valid [L1]\n```python\nInvalid [L99]\n````',
+])
+def test_unmatched_backticks_never_hide_invalid_citations(answer):
+    with pytest.raises(CitationError):
+        grounded_answer('Q?', [Evidence('L1', 'loc', 'text')], lambda prompt: answer)
+
+
+def test_closed_code_spans_and_fences_do_not_count_as_citations():
+    answer = 'Valid [L1] `code [L99]` and ``code ` [L98]``\n```python\n[L97]\n```'
+    result = grounded_answer('Q?', [Evidence('L1', 'loc', 'text')], lambda prompt: answer)
+    assert result.content == answer

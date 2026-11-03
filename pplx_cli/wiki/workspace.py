@@ -797,7 +797,7 @@ class WikiWorkspace:
             scores = model.predict([(query, result.content) for result in results])
             for result, score in zip(results, scores):
                 result.score = float(score)
-        except (ImportError, OSError, RuntimeError) as error:
+        except (ImportError, OSError, RuntimeError, TypeError) as error:
             logger.warning("Local reranker unavailable; using hybrid ranking: %s", error)
 
     def query(
