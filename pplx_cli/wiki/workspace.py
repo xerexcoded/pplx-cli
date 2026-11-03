@@ -808,15 +808,30 @@ class WikiWorkspace:
         web: bool = False,
         limit: int = 8,
     ) -> WikiAnswer:
+        effective = provider or Config.get_instance().provider
+        is_ollama = str(getattr(effective, "value", effective)).lower() == "ollama"
+        if local_only_enabled() and not is_ollama:
+            raise ValueError("Local-only mode requires the Ollama provider.")
+        if is_ollama:
+            if web:
+                raise ValueError("Web research is unavailable in local-only mode.")
+            from ..ollama import verified_operation
+            with verified_operation(model), local_only_mode():
+                return self._query_impl(question, provider=effective, model=model, web=web, limit=limit)
+        return self._query_impl(question, provider=effective, model=model, web=web, limit=limit)
+
+    def _query_impl(
+        self,
+        question: str,
+        provider: Optional[Provider | str] = None,
+        model: Optional[str] = None,
+        web: bool = False,
+        limit: int = 8,
+    ) -> WikiAnswer:
         effective_provider = provider or Config.get_instance().provider
         local = local_only_enabled() or str(getattr(effective_provider, "value", effective_provider)).lower() == "ollama"
         if local and web:
             raise ValueError("Web research is unavailable in local-only mode.")
-        if local and not local_only_enabled():
-            from ..ollama import verify_model
-            verify_model(model)
-            with local_only_mode():
-                return self.query(question, provider=effective_provider, model=model, web=web, limit=limit)
         results = self.search(question, limit=limit, rerank=True)
         if not results:
             raise ValueError("No local evidence found. Ingest sources, then run wiki sync.")
@@ -895,7 +910,10 @@ class WikiWorkspace:
     def _validate_managed_page(self, path: Path) -> None:
         if not path.exists():
             return
-        existing = path.read_text(encoding="utf-8")
+        try:
+            existing = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as error:
+            raise ValueError(f"Cannot compile {path}: invalid UTF-8; repair the file encoding before compiling.") from error
         if (existing.count(self.GENERATED_START) != 1 or
                 existing.count(self.GENERATED_END) != 1 or
                 existing.index(self.GENERATED_START) >= existing.index(self.GENERATED_END)):
@@ -924,14 +942,25 @@ class WikiWorkspace:
         model: Optional[str] = None,
         dry_run: bool = False,
     ) -> List[Path]:
+        effective = provider or Config.get_instance().provider
+        is_ollama = str(getattr(effective, "value", effective)).lower() == "ollama"
+        if local_only_enabled() and not is_ollama:
+            raise ValueError("Local-only mode requires the Ollama provider.")
+        if is_ollama:
+            from ..ollama import verified_operation
+            with verified_operation(model), local_only_mode():
+                return self._compile_impl(provider=effective, model=model, dry_run=dry_run)
+        return self._compile_impl(provider=effective, model=model, dry_run=dry_run)
+
+    def _compile_impl(
+        self,
+        provider: Optional[Provider | str] = None,
+        model: Optional[str] = None,
+        dry_run: bool = False,
+    ) -> List[Path]:
         """Generate source pages and an interlinked overview without overwriting manual notes."""
         effective_provider = provider or Config.get_instance().provider
         local = local_only_enabled() or str(getattr(effective_provider, "value", effective_provider)).lower() == "ollama"
-        if local and not local_only_enabled():
-            from ..ollama import verify_model
-            verify_model(model)
-            with local_only_mode():
-                return self.compile(provider=provider, model=model, dry_run=dry_run)
         rows = self._source_rows()
         if not rows:
             raise ValueError("No sources are indexed. Run wiki ingest or wiki sync first.")
