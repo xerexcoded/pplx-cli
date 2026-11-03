@@ -184,9 +184,11 @@ def get_context_budget(model=None):
     return min(_settings()[2], _model_context(info))
 
 
-def get_output_budget(model=None):
-    """Reserve at most one quarter of the context for generated tokens."""
-    return min(1024, get_context_budget(model) // 4)
+def get_output_budget(context_tokens):
+    """Calculate the output reserve from an already verified context window."""
+    if isinstance(context_tokens, bool) or not isinstance(context_tokens, int) or context_tokens < 1024:
+        raise ValueError("Context window must be an integer of at least 1024 tokens")
+    return min(1024, context_tokens // 4)
 
 
 def chat(messages, model=None):
@@ -196,7 +198,7 @@ def chat(messages, model=None):
     with _session() as session:
         model, info = _verify(session, model)
         context = min(_settings()[2], _model_context(info))
-        output_budget = min(1024, context // 4)
+        output_budget = get_output_budget(context)
         # UTF-8 bytes provide a conservative token estimate for ordinary
         # byte-based tokenizers, with room for role/template framing.
         input_budget = sum(len(item["content"].encode("utf-8")) + 32 for item in messages)
