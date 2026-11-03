@@ -112,8 +112,9 @@ def test_cli_workspace_runs_inside_local_policy(setup_ollama, monkeypatch):
         raise RuntimeError("checked")
     monkeypatch.setattr("pplx_cli.cli._wiki_workspace", workspace)
     result = CliRunner().invoke(app, ["wiki", "query", "private", "--dir", "/tmp", "--provider", "ollama", "--model", "test"])
-    assert isinstance(result.exception, RuntimeError)
-    assert str(result.exception) == "checked"
+    assert result.exit_code == 1
+    assert "checked" in result.output
+    assert isinstance(result.exception, SystemExit)
 
 
 def test_cli_rejects_web_before_verification(setup_ollama, monkeypatch):
