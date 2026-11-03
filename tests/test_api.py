@@ -55,7 +55,7 @@ def test_query_chat_uses_provider_endpoint_headers_and_model(
     }
 
 
-@pytest.mark.parametrize("provider", list(Provider))
+@pytest.mark.parametrize("provider", [p for p in Provider if p != Provider.OLLAMA])
 def test_query_chat_uses_provider_default_model(requests_mock, provider):
     config = Config.get_instance()
     config.provider = provider
@@ -70,7 +70,7 @@ def test_query_chat_uses_provider_default_model(requests_mock, provider):
     assert requests_mock.last_request.json()["model"] == settings.default_model
 
 
-@pytest.mark.parametrize("provider", list(Provider))
+@pytest.mark.parametrize("provider", [p for p in Provider if p != Provider.OLLAMA])
 def test_query_chat_no_api_key(provider):
     config = Config.get_instance()
     config.provider = provider

@@ -7,6 +7,8 @@ import logging
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
+from .local import local_only_enabled
+
 logger = logging.getLogger(__name__)
 
 class NotesDB:
@@ -17,13 +19,25 @@ class NotesDB:
         self.directory = directory
         self.db_path = directory / "notes.db"
         self._model = None
+        self._model_local_only = False
         self._init_db()
 
     @property
     def model(self):
         """Lazy load the model only when needed."""
-        if self._model is None:
-            self._model = SentenceTransformer(self.DEFAULT_MODEL)
+        local = local_only_enabled()
+        if self._model is None or (local and not self._model_local_only):
+            try:
+                kwargs = {"local_files_only": True} if local else {}
+                self._model = SentenceTransformer(self.DEFAULT_MODEL, **kwargs)
+                self._model_local_only = local
+            except Exception as error:
+                if local:
+                    raise RuntimeError(
+                        f"Notes embedding model {self.DEFAULT_MODEL} is unavailable in the local cache. "
+                        "Prepare the model explicitly before running an Ollama query."
+                    ) from error
+                raise
         return self._model
 
     def _init_db(self):
@@ -55,6 +69,8 @@ class NotesDB:
             embedding = self.model.encode(text, show_progress_bar=False)
             return embedding.astype(np.float32).tobytes()
         except Exception as e:
+            if local_only_enabled():
+                raise
             logger.warning(f"Could not generate embedding: {str(e)}")
             return np.zeros(384, dtype=np.float32).tobytes()
 
@@ -172,6 +188,8 @@ class NotesDB:
                 results.sort(key=lambda x: x[1], reverse=True)
                 return results[:top_k]
         except Exception as e:
+            if local_only_enabled():
+                raise
             logger.warning(f"Search failed: {str(e)}")
             with sqlite3.connect(self.db_path) as conn:
                 conn.row_factory = sqlite3.Row
