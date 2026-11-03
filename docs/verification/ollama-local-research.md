@@ -4,13 +4,13 @@ Verified on 2026-11-03 using the pinned Nix development environment: Python 3.12
 
 ## Automated regressions
 
-The integrated suite passed **317 tests** at implementation revision `b224ffe`. Coverage includes hosted-provider compatibility, configuration preservation, rejected unsafe daemon/model states, frozen connection settings, scoped preflight reuse and retry verification, cache-only loaders, source lifecycle, bounded evidence, citation correction, generated-page protection, and CLI integration.
+The integrated suite passed **319 tests** at revision `1d82ddc`. Coverage includes hosted-provider compatibility, configuration preservation, rejected unsafe daemon/model states, frozen connection settings, scoped preflight reuse and retry verification, real wiki operation scopes with mocked HTTP, cache-only loaders, source lifecycle, bounded evidence, citation correction, generated-page protection, and CLI integration.
 
 Hosted-provider tests use HTTP/model doubles. They do not claim live hosted-service validation. The latest pull-request test checks are the authoritative results for later revisions.
 
 ## Real model workflow
 
-`scripts/verify-local-research.py` completed these commands with the cached `gemma3:4b` model:
+`scripts/verify-local-research.py` completed these commands with the cached `gemma3:4b` model at implementation revision `b224ffe` (later changes add tests and documentation):
 
 | Command | Result |
 | --- | --- |
