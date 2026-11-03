@@ -56,7 +56,7 @@ def test_damaged_page_prevents_all_generation_and_writes(tmp_path, monkeypatch):
         pytest.fail('must validate all pages before model calls')
     monkeypatch.setattr('pplx_cli.wiki.workspace.query_chat_completion', no_call)
     with pytest.raises(ValueError, match='markers'):
-        workspace.compile()
+        workspace.compile(provider="perplexity")
     assert overview.read_text(encoding='utf-8') == 'manual notes without markers'
 
 
@@ -197,7 +197,7 @@ def test_damaged_source_page_never_generates_or_changes_files(tmp_path, monkeypa
     path.write_bytes(data)
     monkeypatch.setattr('pplx_cli.wiki.workspace.query_chat_completion', lambda *a, **k: pytest.fail('model called'))
     with pytest.raises(ValueError, match='markers|codec'):
-        workspace.compile()
+        workspace.compile(provider="perplexity")
     assert path.read_bytes() == data
     assert source.read_bytes() == b'vector evidence'
     assert not (workspace.wiki_dir / 'overview.md').exists()
@@ -285,3 +285,20 @@ def test_closed_code_spans_and_fences_do_not_count_as_citations():
     answer = 'Valid [L1] `code [L99]` and ``code ` [L98]``\n```python\n[L97]\n```'
     result = grounded_answer('Q?', [Evidence('L1', 'loc', 'text')], lambda prompt: answer)
     assert result.content == answer
+
+
+def test_inline_triple_backticks_do_not_open_a_fence():
+    answer = 'Valid [L1]\n```a```\nInvalid [L99]\n```'
+    with pytest.raises(CitationError):
+        grounded_answer('Q?', [Evidence('L1', 'loc', 'text')], lambda prompt: answer)
+
+
+def test_context_budget_rejects_too_small_or_absent_evidence_without_writing():
+    def no_writer(prompt):
+        pytest.fail('writer must not run')
+    item = Evidence('L1', 'loc', 'x' * 10000)
+    with pytest.raises(ValueError, match='increase the configured context size'):
+        grounded_answer('Q?', [item], no_writer, context_tokens=1024)
+    for evidence in ([], [item]):
+        with pytest.raises(CitationError, match='No evidence fits'):
+            grounded_answer('Q?', evidence, no_writer, context_tokens=4096)

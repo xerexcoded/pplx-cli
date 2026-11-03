@@ -77,7 +77,7 @@ def _without_code(text: str) -> str:
     i = 0
     while i < len(lines):
         opening = re.match(r"^ {0,3}(`{3,}|~{3,})[^\n\r]*\r?\n?$", lines[i])
-        if opening:
+        if opening and not (opening.group(1).startswith("`") and "`" in lines[i][opening.end(1):]):
             delimiter = opening.group(1)
             closing = re.compile(r"^ {0,3}" + re.escape(delimiter) + r"[ \t]*\r?\n?$")
             end = next((j for j in range(i + 1, len(lines)) if closing.fullmatch(lines[j])), None)
