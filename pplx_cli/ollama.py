@@ -162,7 +162,10 @@ def list_chat_models():
         for entry in _models(session):
             try:
                 _show(session, entry["name"], entry)
-            except (_IneligibleModel, _MalformedModel) as error:
+            except _IneligibleModel as error:
+                _logger.debug("Skipping incompatible Ollama model %s: %s", entry["name"], error)
+                continue
+            except _MalformedModel as error:
                 _logger.warning("Skipping incompatible Ollama model %s: %s", entry["name"], error)
                 continue
             result.append(entry["name"])
@@ -184,7 +187,7 @@ def _verify(session, model):
 def _selected_model(model=None):
     active = _operation.get()
     if active is not None:
-        if model is not None and model not in (active["requested"], active["resolved"]):
+        if model and model not in (active["requested"], active["resolved"]):
             raise OllamaError("A different Ollama model cannot be used inside an active verified operation")
         return active["requested"]
     selected = model or Config.get_instance().get_default_model(Provider.OLLAMA)

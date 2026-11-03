@@ -148,6 +148,8 @@ def test_discovery_skips_cloud_without_show_and_propagates_malformed(setup_ollam
         assert list_chat_models() == []
     shows = [r.json()["model"] for r in requests_mock.request_history if r.path == "/api/show"]
     assert shows == ["test:latest"]
+    assert "cloud:latest" not in caplog.text
+    assert "test:latest" in caplog.text
 
 
 def test_context_clamps_to_model_and_bounds_output(setup_ollama, requests_mock):
@@ -433,3 +435,32 @@ def test_verified_operation_closes_session_on_failure(setup_ollama, requests_moc
         with ollama.verified_operation("test"):
             raise RuntimeError("abort")
     session.close.assert_called_once_with()
+
+
+def test_empty_model_reuses_active_default_in_nested_scopes(setup_ollama, requests_mock):
+    from pplx_cli.ollama import chat, verified_operation
+    config.save_ollama_settings("http://127.0.0.1:11434", "test")
+    register(requests_mock)
+    with verified_operation(""):
+        config.save_ollama_settings("http://127.0.0.1:11434", "other")
+        with verified_operation(""):
+            assert chat([{"role": "user", "content": "hello"}], model="")[0] == "answer"
+    assert requests_mock.last_request.json()["model"] == "test:latest"
+    assert [r.path for r in requests_mock.request_history] == ["/api/status", "/api/tags", "/api/show", "/api/chat"]
+
+
+@pytest.mark.parametrize("first_response", [
+    {"status_code": 500},
+    {"json": {"done_reason": "length", "message": {"content": "incomplete"}}},
+])
+def test_failed_generation_requires_reverification(setup_ollama, requests_mock, first_response):
+    from pplx_cli.ollama import chat, verified_operation
+    register(requests_mock)
+    requests_mock.post("http://127.0.0.1:11434/api/chat", [
+        first_response, {"json": {"message": {"content": "answer"}}},
+    ])
+    with verified_operation("test"):
+        with pytest.raises(OllamaError):
+            chat([{"role": "user", "content": "first"}], model="test")
+        assert chat([{"role": "user", "content": "second"}], model="test")[0] == "answer"
+    assert [r.path for r in requests_mock.request_history] == ["/api/status", "/api/tags", "/api/show", "/api/chat"] * 2
