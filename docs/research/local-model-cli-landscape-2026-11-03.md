@@ -2,7 +2,7 @@
 
 Verified against primary documentation on 2026-11-03. This is documentation research; the tools were not installed or benchmarked.
 
-The subsequent design interview confirmed an [Ollama local research specification](../design/ollama-local-research.md). That specification supersedes the initial rollout suggestions below: selecting Ollama automatically enforces local-only operation, and live web research is deferred.
+The subsequent design interview confirmed an [Ollama local research specification](../design/ollama-local-research.md). That specification supersedes the initial rollout suggestions below: selecting Ollama automatically enforces local-only operation, and live web research is deferred. The repository baseline and proposals below describe the state before implementation; see the [verification report](../verification/ollama-local-research.md) for the implemented result.
 
 Ollama support alone is already common. A useful next feature for this repository is **local cited research over its existing sources, wiki, and notes**, with an explicit offline mode and optional online search. This is a proposed improvement to this repository, not a claim that no other tool offers the workflow.
 
@@ -17,7 +17,7 @@ Local inference does not itself retrieve current web evidence. Ollama also offer
 
 This repository already defaults to local BGE embeddings and has a source-backed wiki query/compile pipeline and SQLite notes. Chat providers currently cover Perplexity, NVIDIA, and OpenRouter, with fixed endpoints and mandatory keys. Wiki queries produce local evidence answers and can request a separate Perplexity web answer; they do not yet perform one local synthesis over captured web and local evidence. Citation instructions in prompts are not validation that each claim is supported. [Provider configuration](../../pplx_cli/config.py), [completion requests](../../pplx_cli/api.py), [embeddings](../../pplx_cli/rag/embeddings.py), [wiki workspace](../../pplx_cli/wiki/workspace.py), [notes](../../pplx_cli/notes.py)
 
-Suggested sequence, all **unimplemented**:
+Initial suggested sequence, superseded by the confirmed design:
 
 1. Add a first-class Ollama provider with optional authentication, persisted endpoint/model selection, installed-model discovery via `/api/tags`, and suitable local timeouts/context budgets. Update configuration read/save handling to preserve the new fields. Retain existing BGE embeddings initially and route wiki query/compile through the provider. Ollama's OpenAI-compatible API fits the current request shape. [Compatibility](https://docs.ollama.com/api/openai-compatibility), [model listing](https://docs.ollama.com/api/tags), [current configuration](../../pplx_cli/config.py)
 2. Make `--offline` an enforced contract: reject web search, remote providers/endpoints, cloud-routed models, model downloads, and remote fallbacks. Check the effective embedding provider because wiki can inherit remote Perplexity embeddings. Preflight cached BGE, CrossEncoder reranker, and the separate MiniLM notes model. Existing local model loaders can fetch missing assets, so an endpoint change alone is insufficient. [Embedding loader](../../pplx_cli/rag/embeddings.py), [wiki reranker](../../pplx_cli/wiki/workspace.py), [notes loader](../../pplx_cli/notes.py)

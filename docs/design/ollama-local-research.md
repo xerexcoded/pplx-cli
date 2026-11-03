@@ -16,7 +16,7 @@ The supporting [landscape research](../research/local-model-cli-landscape-2026-1
 - Preserve current hosted-provider defaults until the user explicitly selects Ollama as the default. Continue supporting per-command provider/model selection.
 - Officially support Ollama as the first local runtime. Keep the provider interface extensible without promising other runtimes in this release.
 
-Illustrative future invocation, unavailable until implementation:
+Supported invocation:
 
 ```sh
 perplexity wiki query "Why did we choose SQLite?" \
