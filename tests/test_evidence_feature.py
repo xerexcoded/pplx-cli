@@ -425,3 +425,36 @@ def test_source_marker_text_cannot_damage_managed_pages_on_recompile(tmp_path, m
         assert content.count(workspace.GENERATED_END) == 1
         assert content.count('Manual sentinel.') == 1
     assert source.read_bytes() == original
+
+
+@pytest.mark.parametrize('budget,output_budget', [(4096, 1024), (2048, 512)])
+def test_query_splits_large_evidence_and_returns_only_supplied_excerpt(tmp_path, monkeypatch, budget, output_budget):
+    import json
+    import sys
+    import types
+    from tests.test_wiki_workspace import FakeEmbeddingModel
+    from pplx_cli.api import ChatCompletion
+    from pplx_cli.local import local_only_mode
+    from pplx_cli.wiki import WikiWorkspace
+    workspace = WikiWorkspace(tmp_path, embedding_model=FakeEmbeddingModel())
+    source = tmp_path / 'notes.txt'
+    raw = ('é' * 1500).encode('utf-8')
+    source.write_bytes(raw)
+    workspace.sync()
+    monkeypatch.setattr(workspace, '_rerank', lambda *a: None)
+    monkeypatch.setitem(sys.modules, 'pplx_cli.ollama', types.SimpleNamespace(
+        get_context_budget=lambda model: budget, get_output_budget=lambda context: output_budget))
+    prompts = []
+    def writer(prompt, **kwargs):
+        prompts.append(prompt)
+        return ChatCompletion(content='Supported [L1]', model='fake')
+    monkeypatch.setattr('pplx_cli.wiki.workspace.query_chat_completion', writer)
+    with local_only_mode():
+        answer = workspace.query('vector', provider='ollama')
+    records = [json.loads(line) for line in prompts[0].split('Evidence (JSON records):\n', 1)[1].splitlines()]
+    assert len(prompts[0].encode('utf-8')) <= budget - output_budget
+    assert answer.omitted_evidence > 0
+    assert [result.content for result in answer.local_results] == [item['excerpt'] for item in records]
+    assert all(result.content in raw.decode('utf-8') for result in answer.local_results)
+    assert all(result.locator == 'Text' and result.source_id == 1 for result in answer.local_results)
+    assert source.read_bytes() == raw
