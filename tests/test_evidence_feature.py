@@ -374,3 +374,23 @@ def test_local_query_uses_model_output_budget_at_2048(tmp_path, monkeypatch):
         answer = workspace.query('vector', provider='ollama')
     assert answer.content == 'Supported [L1]'
     assert answer.local_results[0].content == 'Vector evidence'
+
+
+def test_adjacent_known_letter_citation_needs_no_repair():
+    prompts = []
+    def writer(prompt):
+        prompts.append(prompt)
+        return 'Claim[L1] and note[N1].'
+    result = grounded_answer('Q?', [Evidence('L1', 'loc', 'text'), Evidence('N1', 'loc', 'text')], writer)
+    assert result.content == 'Claim[L1] and note[N1].'
+    assert len(prompts) == 1
+
+
+def test_adjacent_unknown_letter_citation_triggers_repair():
+    prompts = []
+    def writer(prompt):
+        prompts.append(prompt)
+        return 'Claim[L1] invented[X99].' if len(prompts) == 1 else 'Claim[L1]; arr[0].'
+    result = grounded_answer('Q?', [Evidence('L1', 'loc', 'text')], writer)
+    assert result.content == 'Claim[L1]; arr[0].'
+    assert len(prompts) == 2
