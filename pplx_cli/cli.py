@@ -8,7 +8,7 @@ import platform
 import json
 from .api import query_chat
 from .local import local_only_mode
-from .ollama import OllamaError, verify_model, list_chat_models, temporary_settings
+from .ollama import OllamaError, verified_operation, list_chat_models, temporary_settings
 from .config import (
     Config,
     PerplexityModel,
@@ -245,12 +245,15 @@ def _ollama_errors():
         raise typer.Exit(code=1) from error
 
 
-def _verify_local_model(model):
-    try:
-        verify_model(model)
-    except OllamaError as error:
-        typer.echo(f"Ollama error: {error}", err=True)
-        raise typer.Exit(code=1) from error
+@contextmanager
+def _provider_operation(provider, model):
+    with _ollama_errors(), local_only_mode(provider == Provider.OLLAMA):
+        if provider == Provider.OLLAMA:
+            with verified_operation(model):
+                yield
+        else:
+            yield
+
 
 @app.command()
 def ask(
@@ -277,9 +280,7 @@ def ask(
     if selected_provider == Provider.OLLAMA and web:
         raise typer.BadParameter("--web is unavailable with Ollama local-only mode")
     selected_model = get_model_for_provider(model, selected_provider)
-    if selected_provider == Provider.OLLAMA:
-        _verify_local_model(selected_model)
-    with local_only_mode(selected_provider == Provider.OLLAMA), _ollama_errors():
+    with _provider_operation(selected_provider, selected_model):
         try:
             selected_provider = get_provider_from_name(provider)
             settings = get_provider_settings(selected_provider)
@@ -474,9 +475,7 @@ def ask_notes(
     """Ask questions about your notes using RAG."""
     selected_provider = get_provider_from_name(provider)
     selected_model = get_model_for_provider(model, selected_provider)
-    if selected_provider == Provider.OLLAMA:
-        _verify_local_model(selected_model)
-    with local_only_mode(selected_provider == Provider.OLLAMA), _ollama_errors():
+    with _provider_operation(selected_provider, selected_model):
         config = Config.get_instance()
         notes_dir = directory or config.notes_dir
         db = NotesDB(notes_dir)
@@ -1096,9 +1095,7 @@ def wiki_compile(
     """Compile indexed sources into interlinked Markdown pages with source footnotes."""
     selected_provider = get_provider_from_name(provider)
     selected_model = get_model_for_provider(model, selected_provider)
-    if selected_provider == Provider.OLLAMA:
-        _verify_local_model(selected_model)
-    with local_only_mode(selected_provider == Provider.OLLAMA), _ollama_errors():
+    with _provider_operation(selected_provider, selected_model):
         selected_provider = get_provider_from_name(provider)
         ensure_api_key(selected_provider)
         selected_model = get_model_for_provider(model, selected_provider)
@@ -1141,9 +1138,7 @@ def wiki_query(
     if selected_provider == Provider.OLLAMA and web:
         raise typer.BadParameter("--web is unavailable with Ollama local-only mode")
     selected_model = get_model_for_provider(model, selected_provider)
-    if selected_provider == Provider.OLLAMA:
-        _verify_local_model(selected_model)
-    with local_only_mode(selected_provider == Provider.OLLAMA), _ollama_errors():
+    with _provider_operation(selected_provider, selected_model):
         selected_provider = get_provider_from_name(provider)
         ensure_api_key(selected_provider)
         if web:

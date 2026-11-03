@@ -1,4 +1,5 @@
 import json
+from contextlib import contextmanager
 
 import pytest
 import requests
@@ -8,6 +9,12 @@ from pplx_cli.api import query_chat_completion
 from pplx_cli.config import Provider
 from pplx_cli.local import local_only_mode
 from pplx_cli.ollama import OllamaError, temporary_settings, verify_model
+
+
+@contextmanager
+def _mock_operation(fn, model):
+    fn(model)
+    yield
 
 
 @pytest.fixture
@@ -94,7 +101,7 @@ def test_cli_verifies_before_constructing_workspace(setup_ollama, monkeypatch):
     def verify(model):
         events.append("verify")
         raise OllamaError("unverified")
-    monkeypatch.setattr("pplx_cli.cli.verify_model", verify)
+    monkeypatch.setattr("pplx_cli.cli.verified_operation", lambda model: _mock_operation(verify, model))
     monkeypatch.setattr("pplx_cli.cli._wiki_workspace", lambda path: events.append("workspace"))
     result = CliRunner().invoke(app, ["wiki", "query", "private", "--dir", "/tmp", "--provider", "ollama", "--model", "test"])
     assert result.exit_code != 0
@@ -106,7 +113,7 @@ def test_cli_workspace_runs_inside_local_policy(setup_ollama, monkeypatch):
     from typer.testing import CliRunner
     from pplx_cli.cli import app
     from pplx_cli.local import local_only_enabled
-    monkeypatch.setattr("pplx_cli.cli.verify_model", lambda model: None)
+    monkeypatch.setattr("pplx_cli.cli.verified_operation", lambda model: _mock_operation(lambda _: None, model))
     def workspace(path):
         assert local_only_enabled()
         raise RuntimeError("checked")
@@ -119,7 +126,7 @@ def test_cli_workspace_runs_inside_local_policy(setup_ollama, monkeypatch):
 def test_cli_rejects_web_before_verification(setup_ollama, monkeypatch):
     from typer.testing import CliRunner
     from pplx_cli.cli import app
-    monkeypatch.setattr("pplx_cli.cli.verify_model", lambda model: pytest.fail("unexpected verification"))
+    monkeypatch.setattr("pplx_cli.cli.verified_operation", lambda model: _mock_operation(lambda _: pytest.fail("unexpected verification"), model))
     result = CliRunner().invoke(app, ["wiki", "query", "private", "--dir", "/tmp", "--provider", "ollama", "--web"])
     assert result.exit_code == 2
     assert "web" in result.output and "unavailable" in result.output
@@ -133,11 +140,11 @@ def test_malformed_remote_markers_fail_closed(setup_ollama, requests_mock, marke
     assert [r.path for r in requests_mock.request_history] == ["/api/status", "/api/tags"]
 
 
-def test_discovery_skips_cloud_without_show_and_propagates_malformed(setup_ollama, requests_mock):
+def test_discovery_skips_cloud_without_show_and_propagates_malformed(setup_ollama, requests_mock, caplog):
     from pplx_cli.ollama import list_chat_models
     register(requests_mock, tags={"models": [{"name": "cloud:latest", "remote_host": "cloud.invalid"}, {"name": "test:latest"}]}, show={"capabilities": "invalid"})
-    with pytest.raises(OllamaError, match="capabilities"):
-        list_chat_models()
+    with caplog.at_level("WARNING"):
+        assert list_chat_models() == []
     shows = [r.json()["model"] for r in requests_mock.request_history if r.path == "/api/show"]
     assert shows == ["test:latest"]
 
@@ -183,7 +190,7 @@ def test_cli_verification_failure_is_actionable(setup_ollama, monkeypatch, argum
     from pplx_cli.cli import app
     def fail(model):
         raise OllamaError("Start the daemon with cloud disabled")
-    monkeypatch.setattr("pplx_cli.cli.verify_model", fail)
+    monkeypatch.setattr("pplx_cli.cli.verified_operation", lambda model: _mock_operation(fail, model))
     result = CliRunner().invoke(app, arguments + ["--provider", "ollama", "--model", "test"])
     assert result.exit_code == 1
     assert "Start the daemon with cloud disabled" in result.output
@@ -231,7 +238,7 @@ def test_verify_precedes_retrieval_construction(setup_ollama, monkeypatch, argum
     from pplx_cli.cli import app
     def fail(model):
         raise OllamaError("daemon unavailable")
-    monkeypatch.setattr("pplx_cli.cli.verify_model", fail)
+    monkeypatch.setattr("pplx_cli.cli.verified_operation", lambda model: _mock_operation(fail, model))
     monkeypatch.setattr("pplx_cli.cli." + constructor, lambda *args: pytest.fail("constructed before verification"))
     result = CliRunner().invoke(app, arguments + ["--provider", "ollama", "--model", "test"])
     assert result.exit_code == 1
@@ -301,18 +308,18 @@ def test_discovery_filters_ineligible_models_and_lists_valid(setup_ollama, reque
 
 
 @pytest.mark.parametrize("value", [True, "4096", -1, 0])
-def test_discovery_rejects_malformed_context(setup_ollama, requests_mock, value):
+def test_discovery_rejects_malformed_context(setup_ollama, requests_mock, value, caplog):
     from pplx_cli.ollama import list_chat_models
     register(requests_mock, show={"capabilities": ["completion"], "model_info": {"x.context_length": value}})
-    with pytest.raises(OllamaError, match="context metadata is malformed"):
-        list_chat_models()
+    with caplog.at_level("WARNING"):
+        assert list_chat_models() == []
 
 
-def test_discovery_rejects_malformed_capabilities(setup_ollama, requests_mock):
+def test_discovery_rejects_malformed_capabilities(setup_ollama, requests_mock, caplog):
     from pplx_cli.ollama import list_chat_models
     register(requests_mock, show={"capabilities": "completion", "model_info": {"x.context_length": 4096}})
-    with pytest.raises(OllamaError, match="capabilities are unavailable"):
-        list_chat_models()
+    with caplog.at_level("WARNING"):
+        assert list_chat_models() == []
 
 
 @pytest.mark.parametrize("context", [True, 1023, 4096.0, "4096", None])
@@ -341,3 +348,87 @@ def test_operation_snapshots_endpoint_timeout_and_context(setup_ollama, requests
     assert [r.path for r in requests_mock.request_history] == ["/api/status", "/api/tags", "/api/show", "/api/chat"]
     assert all(r.hostname == "127.0.0.1" and r.timeout == 123 for r in requests_mock.request_history)
     assert requests_mock.last_request.json()["options"]["num_ctx"] == 4096
+
+
+def test_verified_operation_reuses_first_preflight_and_refreshes_next_chat(setup_ollama, requests_mock):
+    from pplx_cli.ollama import verified_operation, get_context_budget
+    register(requests_mock)
+    with verified_operation("test"):
+        verify_model("test")
+        assert get_context_budget("test") == 4096
+        query_chat_completion("one", model="test", provider=Provider.OLLAMA)
+        assert [r.path for r in requests_mock.request_history] == ["/api/status", "/api/tags", "/api/show", "/api/chat"]
+        query_chat_completion("two", model="test", provider=Provider.OLLAMA)
+    assert [r.path for r in requests_mock.request_history] == ["/api/status", "/api/tags", "/api/show", "/api/chat"] * 2
+    query_chat_completion("three", model="test", provider=Provider.OLLAMA)
+    assert [r.path for r in requests_mock.request_history][-4:] == ["/api/status", "/api/tags", "/api/show", "/api/chat"]
+
+
+def test_nested_operation_restores_state_on_exception(setup_ollama, requests_mock):
+    from pplx_cli.ollama import verified_operation
+    register(requests_mock)
+    with pytest.raises(RuntimeError, match="abort"):
+        with verified_operation("test"):
+            with verified_operation(None):
+                with pytest.raises(OllamaError, match="different Ollama model"):
+                    with verified_operation("other"):
+                        pass
+                raise RuntimeError("abort")
+    query_chat_completion("later", model="test", provider=Provider.OLLAMA)
+    assert [r.path for r in requests_mock.request_history] == ["/api/status", "/api/tags", "/api/show", "/api/status", "/api/tags", "/api/show", "/api/chat"]
+
+
+def test_discovery_warns_for_malformed_models_and_keeps_valid(setup_ollama, requests_mock, caplog):
+    from pplx_cli.ollama import list_chat_models
+    register(requests_mock, tags={"models": [{"name": "broken:latest"}, {"name": "good:latest"}]})
+    requests_mock.post("http://127.0.0.1:11434/api/show", [
+        {"json": {"model_info": {"x.context_length": 4096}}},
+        {"json": {"capabilities": ["completion"], "model_info": {"x.context_length": 4096}}},
+    ])
+    with caplog.at_level("WARNING"):
+        assert list_chat_models() == ["good:latest"]
+    assert "broken:latest" in caplog.text and "capabilities" in caplog.text
+
+
+def test_discovery_warns_for_malformed_show_but_not_transport_failure(setup_ollama, requests_mock, caplog):
+    from pplx_cli.ollama import list_chat_models
+    register(requests_mock, show=[])
+    with caplog.at_level("WARNING"):
+        assert list_chat_models() == []
+    assert "malformed Ollama /api/show" in caplog.text
+    requests_mock.post("http://127.0.0.1:11434/api/show", status_code=500)
+    with pytest.raises(OllamaError, match="HTTP 500"):
+        list_chat_models()
+
+
+def test_cli_ask_reuses_operation_preflight(setup_ollama, requests_mock):
+    from typer.testing import CliRunner
+    from pplx_cli.cli import app
+    register(requests_mock)
+    result = CliRunner().invoke(app, ["ask", "hello", "--provider", "ollama", "--model", "test", "--no-save-history"])
+    assert result.exit_code == 0
+    assert [r.path for r in requests_mock.request_history] == ["/api/status", "/api/tags", "/api/show", "/api/chat"]
+
+
+def test_operation_freezes_default_model_when_config_changes(setup_ollama, requests_mock):
+    from pplx_cli.ollama import verified_operation
+    config.save_ollama_settings("http://127.0.0.1:11434", "test")
+    register(requests_mock)
+    with verified_operation():
+        config.save_ollama_settings("http://127.0.0.1:11434", "other")
+        result = query_chat_completion("private", provider=Provider.OLLAMA)
+        assert result.content == "answer"
+    assert requests_mock.last_request.json()["model"] == "test:latest"
+
+
+def test_verified_operation_closes_session_on_failure(setup_ollama, requests_mock, monkeypatch):
+    from pplx_cli import ollama
+    from unittest.mock import Mock
+    register(requests_mock)
+    session = requests.Session()
+    session.close = Mock(wraps=session.close)
+    monkeypatch.setattr(ollama.requests, "Session", lambda: session)
+    with pytest.raises(RuntimeError, match="abort"):
+        with ollama.verified_operation("test"):
+            raise RuntimeError("abort")
+    session.close.assert_called_once_with()

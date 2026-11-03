@@ -39,7 +39,6 @@ def query_chat_completion(
         raise ValueError("Remote generation is forbidden in local-only mode")
     settings = get_provider_settings(selected_provider)
     selected_model = model.value if isinstance(model, PerplexityModel) else model
-    selected_model = selected_model or config.get_default_model(selected_provider)
     if selected_provider == Provider.OLLAMA:
         from .ollama import chat
         messages = []
