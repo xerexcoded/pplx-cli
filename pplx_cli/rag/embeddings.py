@@ -17,6 +17,8 @@ import requests
 from functools import lru_cache
 import logging
 
+from ..local import local_only_enabled
+
 logger = logging.getLogger(__name__)
 
 RAG_CONFIG_PATH = Path.home() / ".config" / "perplexity" / "rag_config.json"
@@ -62,12 +64,14 @@ class EmbeddingModel:
             cache_dir: Directory for model cache
         """
         self.model_name = self.MODELS.get(model_name, model_name)
+        self._requested_model_name = self.model_name
         self.provider = "local"
         self.device = device or self._get_optimal_device()
         self.quantize = quantize
         self.cache_dir = cache_dir or Path.home() / ".cache" / "pplx-cli" / "models"
         
         self._model = None
+        self._model_local_only = False
         self._embedding_cache = {}
         
         # Create cache directory
@@ -78,6 +82,10 @@ class EmbeddingModel:
     @property
     def model(self) -> SentenceTransformer:
         """Lazy load the model only when needed."""
+        if local_only_enabled() and not self._model_local_only:
+            self.clear_cache()
+            self._model = None
+            self.model_name = self._requested_model_name
         if self._model is None:
             self._load_model()
         return self._model
@@ -97,11 +105,15 @@ class EmbeddingModel:
             logger.info(f"Loading model {self.model_name}...")
             
             # Load model with optimizations
+            local = local_only_enabled()
+            kwargs = {"local_files_only": True} if local else {}
             self._model = SentenceTransformer(
                 self.model_name,
                 device=self.device,
-                cache_folder=str(self.cache_dir)
+                cache_folder=str(self.cache_dir),
+                **kwargs,
             )
+            self._model_local_only = local
             
             # Set max sequence length for optimal performance
             self._model.max_seq_length = self.MAX_SEQUENCE_LENGTH
@@ -114,6 +126,13 @@ class EmbeddingModel:
             
         except Exception as e:
             logger.error(f"Failed to load model {self.model_name}: {e}")
+            if local_only_enabled():
+                self._model = None
+                self._model_local_only = False
+                raise RuntimeError(
+                    f"Embedding model {self.model_name} is unavailable in the local cache. "
+                    "Prepare the model explicitly before running an Ollama query."
+                ) from e
             # Fallback to smaller model
             if self.model_name != self.MODELS["small"]:
                 logger.info("Falling back to small model...")
@@ -174,6 +193,9 @@ class EmbeddingModel:
         Returns:
             Embedding(s) as numpy array(s)
         """
+        if local_only_enabled():
+            # Validate the model even on an LRU hit from a prior non-local run.
+            _ = self.model
         if isinstance(texts, str):
             # Single text
             if use_cache:
@@ -275,6 +297,8 @@ class PerplexityEmbeddingModel:
         use_cache: bool = True,
         show_progress: bool = False,
     ) -> Union[np.ndarray, List[np.ndarray]]:
+        if local_only_enabled():
+            raise RuntimeError("Perplexity embeddings are unavailable in local-only mode; select local embeddings.")
         from ..config import Config, Provider
 
         is_single = isinstance(texts, str)
@@ -362,6 +386,8 @@ def get_embedding_model(
         else:
             _default_model = EmbeddingModel(selected_model, **kwargs)
     
+    if local_only_enabled() and getattr(_default_model, "provider", None) != "local":
+        raise RuntimeError("Perplexity embeddings are unavailable in local-only mode; select local embeddings.")
     return _default_model
 
 
