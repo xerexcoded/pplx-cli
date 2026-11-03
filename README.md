@@ -43,7 +43,7 @@ pip install -e .
 perplexity setup
 ```
 
-The setup prompt lets you choose `perplexity`, `nvidia`, or `openrouter` and securely saves that provider's key as the default.
+The setup prompt lets you choose `perplexity`, `nvidia`, `openrouter`, or `ollama`. Hosted providers save an API key; Ollama setup selects an installed local model and asks whether to change the default.
 
 2. **Migrate your existing data to RAG (recommended):**
 ```bash
@@ -55,9 +55,7 @@ perplexity rag-migrate
 perplexity rag "machine learning concepts"
 ```
 
-## 🔍 Fast RAG System - Your Personal Knowledge Assistant
-
-### Local research with Ollama
+## Local research with Ollama
 
 Start Ollama explicitly with cloud features disabled, then configure the CLI:
 
@@ -94,6 +92,8 @@ Wiki inputs include `.md`, `.markdown`, `.txt`, text PDFs, and previously captur
 Ollama mode rejects live web research, remote embeddings, remote model routing, and non-loopback endpoints. Live URL capture is rejected while Ollama is the default; previously captured snapshots remain usable. Context and output are bounded; an incomplete response raises an explicit error. The application verifies daemon-reported policy, with OS-level network isolation outside its scope.
 
 See the [development setup](docs/development.md), [agreed design](docs/design/ollama-local-research.md), and explicit real-model check in `scripts/verify-local-research.py`.
+
+## 🔍 Fast RAG System - Your Personal Knowledge Assistant
 
 The RAG system transforms your CLI into a **powerful personal knowledge assistant** that can instantly search through all your notes and conversations. This is the **most important feature** of the CLI - it makes all your accumulated knowledge instantly searchable and actionable.
 
