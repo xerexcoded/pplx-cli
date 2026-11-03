@@ -13,7 +13,11 @@
         in {
           default = pkgs.mkShell {
             packages = [ pkgs.python312 pkgs.poetry pkgs.git ];
-            env.POETRY_VIRTUALENVS_IN_PROJECT = "true";
+            env = {
+              POETRY_VIRTUALENVS_IN_PROJECT = "true";
+            } // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+              LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib pkgs.zlib ];
+            };
           };
         });
     };
