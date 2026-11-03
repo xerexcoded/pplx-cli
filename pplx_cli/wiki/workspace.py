@@ -25,9 +25,9 @@ import numpy as np
 import requests
 
 from ..api import ChatCompletion, query_chat_completion
-from ..config import Provider
+from ..config import Config, Provider
 from ..local import local_only_enabled, local_only_mode
-from ..evidence import Evidence, grounded_answer
+from ..evidence import Evidence, grounded_answer, split_evidence
 from ..rag.embeddings import EmbeddingModel, get_embedding_model
 
 logger = logging.getLogger(__name__)
@@ -97,7 +97,7 @@ class WikiWorkspace:
     CHUNK_TOKENS = 384
     CHUNK_OVERLAP_TOKENS = 58
     SUPPORTED_SUFFIXES = {".md", ".markdown", ".pdf", ".txt"}
-    EXCLUDED_DIRS = {".git", ".pplx", "wiki", "__pycache__"}
+    EXCLUDED_DIRS = {".git", ".pplx", "wiki", "__pycache__", ".venv", "venv", "node_modules"}
 
     def __init__(
         self,
@@ -797,7 +797,7 @@ class WikiWorkspace:
             scores = model.predict([(query, result.content) for result in results])
             for result, score in zip(results, scores):
                 result.score = float(score)
-        except Exception as error:
+        except (ImportError, OSError) as error:
             logger.warning("Local reranker unavailable; using hybrid ranking: %s", error)
 
     def query(
@@ -808,14 +808,15 @@ class WikiWorkspace:
         web: bool = False,
         limit: int = 8,
     ) -> WikiAnswer:
-        local = local_only_enabled() or str(getattr(provider, "value", provider)).lower() == "ollama"
+        effective_provider = provider or Config.get_instance().provider
+        local = local_only_enabled() or str(getattr(effective_provider, "value", effective_provider)).lower() == "ollama"
+        if local and web:
+            raise ValueError("Web research is unavailable in local-only mode.")
         if local and not local_only_enabled():
             from ..ollama import verify_model
             verify_model(model)
             with local_only_mode():
-                return self.query(question, provider=provider, model=model, web=web, limit=limit)
-        if local and web:
-            raise ValueError("Web research is unavailable in local-only mode.")
+                return self.query(question, provider=effective_provider, model=model, web=web, limit=limit)
         results = self.search(question, limit=limit, rerank=True)
         if not results:
             raise ValueError("No local evidence found. Ingest sources, then run wiki sync.")
@@ -915,7 +916,8 @@ class WikiWorkspace:
         dry_run: bool = False,
     ) -> List[Path]:
         """Generate source pages and an interlinked overview without overwriting manual notes."""
-        local = local_only_enabled() or str(getattr(provider, "value", provider)).lower() == "ollama"
+        effective_provider = provider or Config.get_instance().provider
+        local = local_only_enabled() or str(getattr(effective_provider, "value", effective_provider)).lower() == "ollama"
         if local and not local_only_enabled():
             from ..ollama import verify_model
             verify_model(model)
@@ -931,7 +933,6 @@ class WikiWorkspace:
         ]
         for target in targets:
             self._validate_managed_page(target)
-        local = local_only_enabled() or str(getattr(provider, "value", provider)).lower() == "ollama"
         if local:
             return self._compile_local(rows, provider, model, dry_run)
         generated_pages: List[Tuple[Path, str]] = []
@@ -940,7 +941,7 @@ class WikiWorkspace:
         for row in rows:
             with self._connect() as conn:
                 chunks = conn.execute(
-                    "SELECT content, heading, locator FROM wiki_chunks WHERE source_id = ? ORDER BY chunk_index",
+                    "SELECT content, heading, locator FROM wiki_chunks WHERE source_id = ? ORDER BY chunk_index LIMIT 8",
                     (row["id"],),
                 ).fetchall()
             source_text = "\n\n".join(
@@ -1000,21 +1001,14 @@ class WikiWorkspace:
                 chunks = conn.execute("SELECT content, locator FROM wiki_chunks WHERE source_id = ? ORDER BY chunk_index", (row["id"],)).fetchall()
             parts = []
             for chunk in chunks:
-                # Large chunks are split by UTF-8 bytes so every part can fit.
-                data = chunk["content"].encode("utf-8")
-                size = max(1, (budget - 1800) // 2)
-                while data:
-                    part = data[:size].decode("utf-8", "ignore")
-                    used = len(part.encode("utf-8"))
-                    if not used:
-                        raise ValueError("Model context budget too small for source text")
-                    data = data[used:]
-                    item = Evidence(f"source-{row['id']}", chunk["locator"], part)
-                    result = grounded_answer("Summarize this source excerpt, preserving qualifiers.", [item],
+                item = Evidence(f"source-{row['id']}", chunk["locator"], chunk["content"])
+                question = "Summarize this source excerpt, preserving qualifiers."
+                for part in split_evidence(item, question, budget, footnotes=True):
+                    result = grounded_answer(question, [part],
                         lambda prompt: query_chat_completion(prompt, provider=provider, model=model).content,
                         context_tokens=budget, footnotes=True)
                     parts.append(result.content.strip())
-                    overview_parts.append((item.id, chunk["locator"], result.content.strip()))
+                    overview_parts.append((part.id, part.locator, result.content.strip()))
             page_name = f"source-{row['id']}-{self._safe_slug(row['title'])}.md"
             generated_pages.append((self.wiki_dir / "sources" / page_name,
                 f"# {row['title']}\n\n" + "\n\n".join(parts) + "\n\n## Source\n\n" + self._source_footnote(row)))
@@ -1023,10 +1017,12 @@ class WikiWorkspace:
         overview = []
         for ident, locator, summary in overview_parts:
             item = Evidence(ident, locator, summary)
-            result = grounded_answer("Summarize this evidence for a wiki overview, including uncertainty.", [item],
-                lambda prompt: query_chat_completion(prompt, provider=provider, model=model).content,
-                context_tokens=budget, footnotes=True)
-            overview.append(result.content.strip())
+            question = "Summarize this evidence for a wiki overview, including uncertainty."
+            for part in split_evidence(item, question, budget, footnotes=True):
+                result = grounded_answer(question, [part],
+                    lambda prompt: query_chat_completion(prompt, provider=provider, model=model).content,
+                    context_tokens=budget, footnotes=True)
+                overview.append(result.content.strip())
         generated_pages.append((self.wiki_dir / "overview.md", "# Overview\n\n" + "\n\n".join(overview) +
             "\n\n## Source pages\n\n" + "\n".join(source_links) + "\n\n## Sources\n\n" +
             "\n".join(self._source_footnote(row) for row in rows)))
