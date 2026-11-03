@@ -95,3 +95,20 @@ def test_singleton_instance(temp_config_dir):
     config1 = Config.get_instance()
     config2 = Config.get_instance()
     assert config1 is config2
+
+
+def test_ollama_config_defaults_and_unknown_settings_survive(temp_config_dir):
+    from pplx_cli.config import Config, Provider, load_api_key, save_ollama_settings
+    config = Config()
+    assert load_api_key(Provider.OLLAMA) is None
+    assert config.get_default_model(Provider.OLLAMA) == ""
+    assert config.get_api_endpoint(Provider.OLLAMA) == "http://127.0.0.1:11434"
+    config_file = temp_config_dir / "config.json"
+    config_file.write_text(json.dumps({"provider": "nvidia", "api_keys": {"nvidia": "key"}, "custom": {"keep": True}}))
+    save_ollama_settings("http://127.0.0.2:11434", "test", make_default=False)
+    assert json.loads(config_file.read_text())["custom"] == {"keep": True}
+    reloaded = Config()
+    assert reloaded.provider == Provider.NVIDIA
+    assert reloaded.get_api_key(Provider.NVIDIA) == "key"
+    assert reloaded.get_default_model(Provider.OLLAMA) == "test"
+    assert reloaded.get_api_endpoint(Provider.OLLAMA) == "http://127.0.0.2:11434"
