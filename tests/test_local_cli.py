@@ -114,3 +114,16 @@ def test_invalid_citations_show_evidence_explicitly(local_cli, monkeypatch):
     assert "Retrieved evidence:" in result.output
     assert item.locator in result.output
     assert item.excerpt in result.output
+
+
+@pytest.mark.parametrize("arguments", [["rag", "question"], ["rag-index"], ["rag-stats"], ["rag-migrate"]])
+def test_rag_commands_respect_default_local_policy(local_cli, monkeypatch, arguments):
+    from pplx_cli.local import local_only_enabled
+    runner, _ = local_cli
+    def inspect_policy():
+        assert local_only_enabled()
+        raise RuntimeError("local RAG cache policy checked")
+    monkeypatch.setattr("pplx_cli.cli.get_rag_db", inspect_policy)
+    result = runner.invoke(app, arguments)
+    assert result.exit_code == 1
+    assert "local RAG cache policy checked" in result.output

@@ -744,6 +744,7 @@ def get_rag_db() -> RagDB:
 
 
 @rag_app.command("search", hidden=True)
+@_local_default_command
 def rag_search(
     query_parts: List[str] = typer.Argument(..., help="Search query"),
     mode: str = typer.Option("hybrid", "--mode", help="Search mode: vector, keyword, or hybrid"),
@@ -828,6 +829,7 @@ def rag_search(
 
 
 @app.command(name="rag-migrate")
+@_local_default_command
 def rag_migrate(
     source: str = typer.Option("both", "--source", help="Migration source: notes, chats, or both"),
     clear: bool = typer.Option(False, "--clear", help="Clear existing RAG data before migration"),
@@ -916,6 +918,7 @@ def rag_migrate(
 
 
 @app.command(name="rag-stats")
+@_local_default_command
 def rag_stats():
     """Show RAG database statistics."""
     try:
@@ -960,6 +963,7 @@ def rag_stats():
 
 
 @app.command(name="rag-index")
+@_local_default_command
 def rag_index(
     clear: bool = typer.Option(False, "--clear", help="Clear existing vector indices before reindexing")
 ):
@@ -986,6 +990,7 @@ def rag_index(
 
 
 @app.command(name="rag-config")
+@_local_default_command
 def rag_config(
     model: Optional[str] = typer.Option(None, "--model", help="Embedding model: small, base, or large"),
     device: Optional[str] = typer.Option(None, "--device", help="Device: cpu, cuda, or mps"),
@@ -1290,6 +1295,7 @@ def wiki_graph(
 
 
 @wiki_app.command("eval")
+@_local_default_command
 def wiki_eval(
     dataset: Path = typer.Option(..., "--dataset", exists=True, readable=True, help="JSONL query/relevant_source_ids set"),
     directory: Path = typer.Option(..., "--dir", help="Initialized wiki workspace directory"),
@@ -1301,6 +1307,7 @@ def wiki_eval(
 
 
 @wiki_app.command("mcp")
+@_local_default_command
 def wiki_mcp(
     directory: Path = typer.Option(..., "--dir", help="Initialized wiki workspace directory")
 ):
@@ -1309,6 +1316,7 @@ def wiki_mcp(
 
 
 @app.command(name="rag-eval")
+@_local_default_command
 def rag_eval(
     dataset: Path = typer.Option(..., "--dataset", exists=True, readable=True, help="JSONL query/relevant_source_ids set"),
     directory: Path = typer.Option(..., "--dir", help="Wiki workspace to evaluate"),
@@ -1320,6 +1328,7 @@ def rag_eval(
 
 
 @rag_app.command("eval")
+@_local_default_command
 def rag_nested_eval(
     dataset: Path = typer.Option(..., "--dataset", exists=True, readable=True, help="JSONL query/relevant_source_ids set"),
     directory: Path = typer.Option(..., "--dir", help="Wiki workspace to evaluate"),
