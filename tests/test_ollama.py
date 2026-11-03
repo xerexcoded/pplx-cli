@@ -45,10 +45,14 @@ def test_unverifiable_cloud_stops_before_prompt(setup_ollama, requests_mock, sta
     assert [r.path for r in requests_mock.request_history] == ["/api/status"]
 
 
-@pytest.mark.parametrize("show", [{}, {"capabilities": ["embedding"]}, {"capabilities": ["completion"], "remote_host": "example.com"}])
-def test_unverifiable_or_remote_model_stops_before_prompt(setup_ollama, requests_mock, show):
+@pytest.mark.parametrize("show,reason", [
+    ({"model_info": {"test.context_length": 4096}}, "capabilities"),
+    ({"capabilities": ["embedding"], "model_info": {"test.context_length": 4096}}, "not chat-capable"),
+    ({"capabilities": ["completion"], "model_info": {"test.context_length": 4096}, "remote_host": "example.com"}, "cloud-routed"),
+])
+def test_unverifiable_or_remote_model_stops_before_prompt(setup_ollama, requests_mock, show, reason):
     register(requests_mock, show=show)
-    with pytest.raises(OllamaError):
+    with pytest.raises(OllamaError, match=reason):
         query_chat_completion("secret", model="test", provider=Provider.OLLAMA)
     assert all(r.path != "/api/chat" for r in requests_mock.request_history)
 
@@ -117,8 +121,8 @@ def test_cli_rejects_web_before_verification(setup_ollama, monkeypatch):
     from pplx_cli.cli import app
     monkeypatch.setattr("pplx_cli.cli.verify_model", lambda model: pytest.fail("unexpected verification"))
     result = CliRunner().invoke(app, ["wiki", "query", "private", "--dir", "/tmp", "--provider", "ollama", "--web"])
-    assert result.exit_code != 0
-    assert "--web is unavailable" in result.output
+    assert result.exit_code == 2
+    assert "web" in result.output and "unavailable" in result.output
 
 
 @pytest.mark.parametrize("marker", [[], {}, True, None, 42])
@@ -205,10 +209,14 @@ def test_invalid_timeout_rejected_at_save_and_use(setup_ollama, timeout):
 def test_local_settings_preserve_hosted_defaults_and_endpoint(setup_ollama):
     config.save_api_key("secret", Provider.NVIDIA)
     config.save_ollama_settings("http://127.0.0.2:1234", "model:latest", timeout=240, context=8192, make_default=False)
-    data = json.loads(config.CONFIG_FILE.read_text())
-    assert data["provider"] == "nvidia"
-    assert data["api_keys"]["nvidia"] == "secret"
-    assert data["ollama"] == {"endpoint": "http://127.0.0.2:1234", "model": "model:latest", "timeout": 240, "context": 8192}
+    config.Config._instance = None
+    reloaded = config.Config.get_instance()
+    assert reloaded.provider == Provider.NVIDIA
+    assert reloaded.get_api_key(Provider.NVIDIA) == "secret"
+    assert reloaded.get_api_endpoint(Provider.OLLAMA) == "http://127.0.0.2:1234"
+    assert reloaded.get_default_model(Provider.OLLAMA) == "model:latest"
+    assert config.load_ollama_settings()["timeout"] == 240
+    assert config.load_ollama_settings()["context"] == 8192
 
 
 @pytest.mark.parametrize("arguments, constructor", [
@@ -226,3 +234,25 @@ def test_verify_precedes_retrieval_construction(setup_ollama, monkeypatch, argum
     result = CliRunner().invoke(app, arguments + ["--provider", "ollama", "--model", "test"])
     assert result.exit_code == 1
     assert "daemon unavailable" in result.output
+
+
+def test_cloud_tag_rejected_before_show(setup_ollama, requests_mock):
+    register(requests_mock, tags={"models": [{"name": "test:latest", "remote_model": "model", "remote_host": "cloud.example"}]})
+    with pytest.raises(OllamaError, match="cloud-routed"):
+        verify_model("test")
+    assert [request.path for request in requests_mock.request_history] == ["/api/status", "/api/tags"]
+
+
+def test_incomplete_generation_is_an_error(setup_ollama, requests_mock):
+    register(requests_mock)
+    requests_mock.post("http://127.0.0.1:11434/api/chat", json={"done_reason": "length", "message": {"content": "incomplete"}})
+    with pytest.raises(OllamaError, match="generation limit.*incomplete"):
+        query_chat_completion("private", model="test", provider=Provider.OLLAMA)
+
+
+def test_oversized_utf8_input_rejected_before_chat(setup_ollama, requests_mock):
+    config.save_ollama_settings("http://127.0.0.1:11434", "test", context=1024)
+    register(requests_mock)
+    with pytest.raises(OllamaError, match="Input is too large"):
+        query_chat_completion("é" * 400, model="test", provider=Provider.OLLAMA)
+    assert all(request.path != "/api/chat" for request in requests_mock.request_history)
