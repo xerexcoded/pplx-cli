@@ -257,3 +257,25 @@ def test_oversized_utf8_input_rejected_before_chat(setup_ollama, requests_mock):
     with pytest.raises(OllamaError, match="Input is too large"):
         query_chat_completion("é" * 400, model="test", provider=Provider.OLLAMA)
     assert all(request.path != "/api/chat" for request in requests_mock.request_history)
+
+
+@pytest.mark.parametrize("model,context", [(None, 4096), (42, 4096), ("test", True), ("test", 4096.0)])
+def test_invalid_save_types_rejected(setup_ollama, model, context):
+    with pytest.raises(ValueError):
+        config.save_ollama_settings("http://127.0.0.1:11434", model, context=context)
+
+
+def test_discovery_skips_models_without_usable_context(setup_ollama, requests_mock):
+    from pplx_cli.ollama import list_chat_models
+    register(requests_mock, tags={"models": [{"name": "odd:latest"}, {"name": "test:latest"}]})
+    requests_mock.post("http://127.0.0.1:11434/api/show", [
+        {"json": {"capabilities": ["completion"], "model_info": {}}},
+        {"json": {"capabilities": ["completion"], "model_info": {"test.context_length": 4096}}},
+    ])
+    assert list_chat_models() == ["test:latest"]
+
+
+def test_unqualified_name_uses_verified_canonical_name(setup_ollama, requests_mock):
+    register(requests_mock)
+    query_chat_completion("hello", model="test", provider=Provider.OLLAMA)
+    assert [r.json()["model"] for r in requests_mock.request_history if r.path in ("/api/show", "/api/chat")] == ["test:latest", "test:latest"]

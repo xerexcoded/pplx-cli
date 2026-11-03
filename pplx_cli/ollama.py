@@ -109,12 +109,18 @@ def _check_remote_markers(obj, model):
 
 def _model_context(info):
     model_info = info.get("model_info")
+    if model_info is None:
+        raise _IneligibleModel("Ollama model context metadata is unavailable; select a compatible model")
     if not isinstance(model_info, dict):
-        raise OllamaError("Ollama model context metadata is unavailable; upgrade the daemon or select a compatible model")
+        raise OllamaError("Ollama model context metadata is malformed")
     values = [value for key, value in model_info.items()
               if isinstance(key, str) and key.endswith(".context_length")]
-    if not values or any(isinstance(value, bool) or not isinstance(value, int) or value < 1024 for value in values):
-        raise OllamaError("Ollama model context metadata is missing or malformed")
+    if not values:
+        raise _IneligibleModel("Ollama model context metadata is missing")
+    if any(isinstance(value, bool) or not isinstance(value, int) for value in values):
+        raise OllamaError("Ollama model context metadata is malformed")
+    if any(value < 1024 for value in values):
+        raise _IneligibleModel("Ollama model context metadata advertises an unsupported context")
     return min(values)
 
 
@@ -153,7 +159,8 @@ def _verify(session, model):
                (":" not in model and item["name"] == model + ":latest")]
     if not matches:
         raise OllamaError(f"Ollama model {model!r} is not installed. Install it explicitly with 'ollama pull {model}' and retry.")
-    return _show(session, model, matches[0])
+    resolved = matches[0]["name"]
+    return resolved, _show(session, resolved, matches[0])
 
 
 def verify_model(model=None):
@@ -171,7 +178,7 @@ def get_context_budget(model=None):
     if not isinstance(model, str) or not model:
         raise OllamaError("No Ollama model configured; run 'perplexity setup --provider ollama'.")
     with _session() as session:
-        info = _verify(session, model)
+        _, info = _verify(session, model)
     return min(_settings()[2], _model_context(info))
 
 
@@ -185,7 +192,7 @@ def chat(messages, model=None):
     if not isinstance(model, str) or not model:
         raise OllamaError("No Ollama model configured; run 'perplexity setup --provider ollama'.")
     with _session() as session:
-        info = _verify(session, model)
+        model, info = _verify(session, model)
         context = min(_settings()[2], _model_context(info))
         output_budget = min(1024, context // 4)
         # UTF-8 bytes provide a conservative token estimate for ordinary
