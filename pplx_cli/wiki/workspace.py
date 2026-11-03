@@ -832,14 +832,16 @@ class WikiWorkspace:
         )
         omitted = 0
         if local:
-            from ..ollama import get_context_budget
+            from ..ollama import get_context_budget, get_output_budget
             items = [Evidence(f"L{result.source_id}", result.citation, result.content) for result in results]
             completions = []
             def writer(prompt: str) -> str:
                 completion = query_chat_completion(prompt, provider=provider, model=model)
                 completions.append(completion)
                 return completion.content
-            answer = grounded_answer(question, items, writer, context_tokens=get_context_budget(model))
+            budget = get_context_budget(model)
+            answer = grounded_answer(question, items, writer, context_tokens=budget,
+                                     output_tokens=get_output_budget(budget))
             local_completion = completions[-1]
             omitted = answer.omitted
             results = [result for result, item in zip(results, items) if item in answer.evidence]
@@ -991,8 +993,9 @@ class WikiWorkspace:
         return [path for path, _ in generated_pages]
 
     def _compile_local(self, rows, provider, model, dry_run):
-        from ..ollama import get_context_budget
+        from ..ollama import get_context_budget, get_output_budget
         budget = get_context_budget(model)
+        output_budget = get_output_budget(budget)
         generated_pages = []
         overview_parts = []
         source_links = []
@@ -1000,28 +1003,37 @@ class WikiWorkspace:
             with self._connect() as conn:
                 chunks = conn.execute("SELECT content, locator FROM wiki_chunks WHERE source_id = ? ORDER BY chunk_index", (row["id"],)).fetchall()
             parts = []
+            evidence_parts = []
             for chunk in chunks:
                 item = Evidence(f"source-{row['id']}", chunk["locator"], chunk["content"])
                 question = "Summarize this source excerpt, preserving qualifiers."
-                for part in split_evidence(item, question, budget, footnotes=True):
+                for part in split_evidence(item, question, budget, output_tokens=output_budget, footnotes=True):
                     result = grounded_answer(question, [part],
                         lambda prompt: query_chat_completion(prompt, provider=provider, model=model).content,
-                        context_tokens=budget, footnotes=True)
+                        context_tokens=budget, output_tokens=output_budget, footnotes=True)
                     parts.append(result.content.strip())
+                    evidence_parts.append(part)
                     overview_parts.append((part.id, part.locator, result.content.strip()))
             page_name = f"source-{row['id']}-{self._safe_slug(row['title'])}.md"
+            evidence_sections = []
+            for part in evidence_parts:
+                text = f"Locator: {part.locator}\n\n{part.excerpt}"
+                fence = "~" * max(3, max((len(run) for run in re.findall(r"~+", text)), default=0) + 1)
+                evidence_sections.append(f"{fence}text\n{text}\n{fence}")
             generated_pages.append((self.wiki_dir / "sources" / page_name,
-                f"# {row['title']}\n\n" + "\n\n".join(parts) + "\n\n## Source\n\n" + self._source_footnote(row)))
+                f"# {row['title']}\n\n" + "\n\n".join(parts) +
+                "\n\n## Supporting evidence\n\n" + "\n\n".join(evidence_sections) +
+                "\n\n## Source\n\n" + self._source_footnote(row)))
             source_links.append(f"- [[sources/{page_name}|{row['title']}]] [^source-{row['id']}]")
         # Summarize each bounded source summary; retain all batches rather than silently truncating.
         overview = []
         for ident, locator, summary in overview_parts:
             item = Evidence(ident, locator, summary)
             question = "Summarize this evidence for a wiki overview, including uncertainty."
-            for part in split_evidence(item, question, budget, footnotes=True):
+            for part in split_evidence(item, question, budget, output_tokens=output_budget, footnotes=True):
                 result = grounded_answer(question, [part],
                     lambda prompt: query_chat_completion(prompt, provider=provider, model=model).content,
-                    context_tokens=budget, footnotes=True)
+                    context_tokens=budget, output_tokens=output_budget, footnotes=True)
                 overview.append(result.content.strip())
         generated_pages.append((self.wiki_dir / "overview.md", "# Overview\n\n" + "\n\n".join(overview) +
             "\n\n## Source pages\n\n" + "\n".join(source_links) + "\n\n## Sources\n\n" +
