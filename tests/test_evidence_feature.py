@@ -614,3 +614,47 @@ def test_wiki_compile_reuses_outer_verified_ollama_scope(tmp_path, requests_mock
     ]
     assert [request.json()['model'] for request in history
             if request.path in ('/api/show', '/api/chat')] == ['test:latest'] * 4
+
+
+def test_overview_processes_every_summary_across_multiple_batches(tmp_path, monkeypatch):
+    import json
+    import sys
+    from collections import Counter
+    from tests.test_wiki_workspace import FakeEmbeddingModel
+    from pplx_cli.api import ChatCompletion
+    from pplx_cli.local import local_only_mode
+    from pplx_cli.wiki import WikiWorkspace
+
+    workspace = WikiWorkspace(tmp_path, embedding_model=FakeEmbeddingModel())
+    for number in range(5):
+        (tmp_path / f'source-{number}.txt').write_text(f'Evidence {number}', encoding='utf-8')
+    workspace.sync()
+    monkeypatch.setitem(sys.modules, 'pplx_cli.ollama', fake_ollama(
+        get_context_budget=lambda model: 2048, get_output_budget=lambda budget: 512))
+    summaries = {}
+    overview_records = []
+    overview_outputs = []
+
+    def writer(prompt, **kwargs):
+        records = [json.loads(line) for line in prompt.split('Evidence (JSON records):\n', 1)[1].splitlines()]
+        if 'Summarize this source excerpt' in prompt:
+            ident = records[0]['id']
+            summary = f'Summary for {ident}: ' + 'x' * 250 + f' [^{ident}]'
+            summaries[ident] = summary
+            return ChatCompletion(content=summary, model='fake')
+        overview_records.extend(records)
+        assert len(overview_outputs) < 5, 'overview batching failed to make progress'
+        output = ' '.join(f'Overview for {record["id"]} [^{record["id"]}]' for record in records)
+        overview_outputs.append(output)
+        return ChatCompletion(content=output, model='fake')
+
+    monkeypatch.setattr('pplx_cli.wiki.workspace.query_chat_completion', writer)
+    with local_only_mode():
+        workspace.compile(provider='ollama')
+
+    assert len(summaries) == 5
+    assert len(overview_outputs) > 1
+    assert Counter(record['id'] for record in overview_records) == Counter(summaries.keys())
+    assert {record['id']: record['excerpt'] for record in overview_records} == summaries
+    overview = (workspace.wiki_dir / 'overview.md').read_text(encoding='utf-8')
+    assert all(overview.count(output) == 1 for output in overview_outputs)
