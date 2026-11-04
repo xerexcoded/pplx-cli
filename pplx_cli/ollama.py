@@ -4,13 +4,13 @@ The trust boundary is daemon-reported policy and model metadata at verification
 time; it is not OS-level isolation or an atomic guarantee against daemon changes.
 """
 import ipaddress
+import logging
 import math
 from contextlib import contextmanager
 from contextvars import ContextVar
 from urllib.parse import urlsplit
 
 import requests
-import logging
 
 from .config import Config, Provider, load_ollama_settings
 
@@ -185,6 +185,7 @@ def _verify(session, model):
 
 
 def _selected_model(model=None):
+    """Treat an omitted or empty override as the frozen operation/default model."""
     active = _operation.get()
     if active is not None:
         if model and model not in (active["requested"], active["resolved"]):
