@@ -48,7 +48,7 @@ def split_evidence(item: Evidence, question: str, context_tokens: int,
     prefix = _instructions(footnotes) + "Question: " + question + "\n\nEvidence (JSON records):\n"
     available = (context_tokens - output_tokens - min(output_tokens, 1024) - 256
                  - len(prefix.encode("utf-8")))
-    if len(_block(Evidence(item.id, item.locator, "")).encode("utf-8")) + 4 > available:
+    if len(_block(Evidence(item.id, item.locator, item.excerpt[:1])).encode("utf-8")) > available:
         raise ValueError("Model context is too small for evidence and output; increase the configured context size.")
     remaining = item.excerpt
     parts = []
@@ -147,5 +147,5 @@ def grounded_answer(question: str, evidence: Sequence[Evidence], writer: Callabl
                       "or explicitly say evidence is insufficient. Previous answer:\n" + previous)
         answer = writer(prompt + correction)
         if invalid(answer):
-            raise CitationError("Citation validation failed after one correction attempt.", evidence)
+            raise CitationError("Citation validation failed after one correction attempt.", included)
     return GroundedAnswer(answer, included, len(evidence) - len(included))
