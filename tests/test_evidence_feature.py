@@ -35,6 +35,26 @@ def test_grounded_answer_failure_exposes_evidence():
     assert item.excerpt not in str(error.value)
 
 
+def test_citation_failure_reports_only_evidence_supplied_to_writer():
+    included = Evidence('L1', 'file:1', 'short excerpt')
+    omitted = Evidence('L2', 'file:2', 'x' * 9000)
+    with pytest.raises(CitationError) as error:
+        grounded_answer('Question?', [included, omitted], lambda prompt: 'claim [L99]',
+                        context_tokens=3000, output_tokens=256)
+    assert error.value.evidence == [included]
+
+
+def test_split_evidence_checks_escaped_first_character_size():
+    from pplx_cli.evidence import _block, _instructions, split_evidence
+    item = Evidence('L1', 'file:1', '\x00')
+    question = 'Q?'
+    prefix = _instructions(False) + 'Question: ' + question + '\n\nEvidence (JSON records):\n'
+    empty_size = len(_block(Evidence(item.id, item.locator, '')).encode('utf-8'))
+    context = 256 + 256 + 256 + len(prefix.encode('utf-8')) + empty_size + 4
+    with pytest.raises(ValueError, match='evidence and output'):
+        split_evidence(item, question, context_tokens=context, output_tokens=256)
+
+
 def test_insufficient_evidence_needs_no_citation():
     answer = grounded_answer('Question?', [Evidence('L1', 'loc', 'text')],
                              lambda prompt: 'Insufficient evidence.')
@@ -209,7 +229,7 @@ def test_damaged_source_page_never_generates_or_changes_files(tmp_path, monkeypa
     path.parent.mkdir()
     path.write_bytes(data)
     monkeypatch.setattr('pplx_cli.wiki.workspace.query_chat_completion', lambda *a, **k: pytest.fail('model called'))
-    with pytest.raises(ValueError, match='markers|invalid UTF-8'):
+    with pytest.raises(ValueError, match='markers|not valid UTF-8'):
         workspace.compile(provider="perplexity")
     assert path.read_bytes() == data
     assert source.read_bytes() == b'vector evidence'

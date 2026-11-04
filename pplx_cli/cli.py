@@ -564,7 +564,7 @@ def ask_notes(
         prompt = (f"Based on the following notes, please answer this question: {query}\n\n"
                   f"Relevant Notes:\n{context}\n\n"
                   "Please provide a comprehensive answer based solely on the information in these notes.")
-    
+
         # Get a response from the selected chat provider.
         try:
             selected_provider = get_provider_from_name(provider)
