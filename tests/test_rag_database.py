@@ -307,3 +307,41 @@ def test_content_type_enum():
     assert ContentType.NOTE.value == "note"
     assert ContentType.CHAT_MESSAGE.value == "chat_message"
     assert ContentType.CONVERSATION.value == "conversation"
+
+
+def test_real_sqlite_vec_widens_filtered_candidates(rag_db, mock_embedding_model, monkeypatch):
+    """Exercise the actual vec0 query and score conversion when the extension loads."""
+    vectors = {}
+
+    def encode(texts, **kwargs):
+        if isinstance(texts, str):
+            return np.array([1.0, 0.0], dtype=np.float32)
+        return np.vstack([vectors[text] for text in texts])
+
+    mock_embedding_model.encode.side_effect = encode
+    entries = [(ContentType.CHAT_MESSAGE, i + 1, i * 0.03) for i in range(10)]
+    entries += [(ContentType.NOTE, 101, 0.5), (ContentType.NOTE, 102, 0.8)]
+    for content_type, source_id, angle in entries:
+        content = f"real vector {source_id}"
+        vectors[content] = np.array([np.cos(angle), np.sin(angle)], dtype=np.float32)
+        rag_db.add_document(content, content_type, source_id)
+
+    if not rag_db.native_vector_available:
+        pytest.skip("sqlite-vec extension cannot be loaded on this SQLite build")
+
+    statements = []
+    load_extension = rag_db._load_sqlite_vec
+    def trace_native_queries(conn):
+        loaded = load_extension(conn)
+        conn.set_trace_callback(statements.append)
+        return loaded
+    monkeypatch.setattr(rag_db, "_load_sqlite_vec", trace_native_queries)
+
+    results = rag_db.vector_search("query", content_types=[ContentType.NOTE], limit=2)
+
+    assert [result[0]["source_id"] for result in results] == [101, 102]
+    assert [result[1] for result in results] == pytest.approx([np.cos(0.5), np.cos(0.8)], abs=1e-5)
+    queries = [sql for sql in statements if "embedding MATCH" in sql]
+    assert len(queries) == 2
+    assert "LIMIT 10" in queries[0] and "LIMIT 20" in queries[1]
+    assert not any(f"JOIN {rag_db.table_name}_vectors" in sql for sql in statements)
