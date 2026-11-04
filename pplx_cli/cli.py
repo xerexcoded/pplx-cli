@@ -1,4 +1,6 @@
 import typer
+from contextlib import contextmanager
+from functools import wraps
 from typer.core import TyperGroup
 from typing import List, Optional, Union
 import getpass
@@ -6,6 +8,12 @@ import sys
 import platform
 import json
 from .api import query_chat
+from .local import local_only_mode, local_only_enabled
+from .ollama import (
+    OllamaError, verified_operation, list_chat_models, temporary_settings,
+    get_context_budget, get_output_budget,
+)
+from .evidence import CitationError, Evidence, grounded_answer, split_evidence
 from .config import (
     Config,
     PerplexityModel,
@@ -14,6 +22,8 @@ from .config import (
     get_version,
     normalize_provider,
     save_api_key,
+    save_ollama_settings,
+    load_ollama_settings,
 )
 from pathlib import Path
 from .notes import NotesDB
@@ -156,7 +166,7 @@ def setup(
     provider: Optional[str] = typer.Option(
         None,
         "--provider",
-        help="Provider to configure: perplexity, nvidia, or openrouter",
+        help="Provider to configure: perplexity, nvidia, openrouter, or ollama",
     )
 ):
     """Configure a default provider and its API key."""
@@ -164,12 +174,33 @@ def setup(
         if provider is None:
             default_provider = Config.get_instance().provider.value
             provider = typer.prompt(
-                "Choose provider (perplexity, nvidia, openrouter)",
+                "Choose provider (perplexity, nvidia, openrouter, ollama)",
                 default=default_provider,
             )
 
         selected_provider = get_provider_from_name(provider)
         settings = get_provider_settings(selected_provider)
+        if selected_provider == Provider.OLLAMA:
+            saved = load_ollama_settings()
+            endpoint = typer.prompt("Ollama loopback endpoint", default=saved.get("endpoint", "http://127.0.0.1:11434"))
+            timeout = typer.prompt("Generation timeout (seconds)", default=saved.get("timeout", 300), type=float)
+            context = typer.prompt("Context window (tokens)", default=saved.get("context", 4096), type=int)
+            with temporary_settings({"endpoint": endpoint, "timeout": timeout, "context": context}):
+                models = list_chat_models()
+            if not models:
+                raise ValueError("No compatible, verifiable local chat models found. Check the warnings above, or explicitly install one with 'ollama pull <model>' and retry.")
+            typer.echo("Installed local chat models:")
+            for item in models:
+                typer.echo(f"- {item}")
+            default_model = saved.get("model") if saved.get("model") in models else models[0]
+            model = typer.prompt("Choose model", default=default_model)
+            if model not in models:
+                raise ValueError("Choose an installed chat model from the list")
+            make_default = typer.confirm("Make Ollama the default provider?", default=False)
+            save_ollama_settings(endpoint, model, timeout, context, make_default)
+            Config.get_instance().reload()
+            typer.echo("Ollama settings saved.")
+            return
         api_key = get_masked_input(
             f"Please enter your {settings.display_name} API key: "
         )
@@ -187,13 +218,33 @@ def setup(
         typer.echo(
             f"You can now ask questions with {settings.display_name}.\n"
         )
+    except (ValueError, RuntimeError) as error:
+        typer.echo(f"Setup failed: {error}", err=True)
+        raise typer.Exit(code=1)
     except KeyboardInterrupt:
         typer.echo("\nSetup cancelled.", err=True)
         raise typer.Exit(code=1)
 
+@app.command("prepare-models")
+def prepare_models(
+    include_reranker: bool = typer.Option(False, "--include-reranker", help="Also download the optional local reranker"),
+):
+    """Explicitly download local retrieval models, without starting Ollama."""
+    from .preparation import prepare_local_models
+
+    try:
+        for name in prepare_local_models(include_reranker=include_reranker):
+            typer.echo(f"Prepared: {name}")
+    except (ValueError, RuntimeError) as error:
+        typer.echo(f"Model preparation failed: {error}", err=True)
+        raise typer.Exit(code=1)
+
+
 def ensure_api_key(provider: Provider) -> None:
     """Check that the selected provider has a key without prompting in scripts."""
     config = Config.get_instance()
+    if provider == Provider.OLLAMA:
+        return
     if not config.get_api_key(provider):
         settings = get_provider_settings(provider)
         typer.echo(
@@ -204,6 +255,43 @@ def ensure_api_key(provider: Provider) -> None:
         )
         raise typer.Exit(code=1)
 
+
+def _print_command_error(error):
+    typer.echo(f"Error: {error}", err=True)
+    if isinstance(error, CitationError):
+        typer.echo("Retrieved evidence:", err=True)
+        for item in error.evidence:
+            typer.echo(f"[{item.id}] {item.locator}\n{item.excerpt}", err=True)
+
+
+@contextmanager
+def _ollama_errors():
+    try:
+        yield
+    except (ValueError, RuntimeError) as error:
+        _print_command_error(error)
+        raise typer.Exit(code=1) from error
+
+
+@contextmanager
+def _provider_operation(provider, model):
+    with _ollama_errors(), local_only_mode(provider == Provider.OLLAMA):
+        if provider == Provider.OLLAMA:
+            with verified_operation(model):
+                yield
+        else:
+            yield
+
+
+
+def _local_default_command(command):
+    """Apply the saved local policy to source commands without a provider flag."""
+    @wraps(command)
+    def run(*args, **kwargs):
+        with local_only_mode(Config.get_instance().provider == Provider.OLLAMA), _ollama_errors():
+            return command(*args, **kwargs)
+    return run
+
 @app.command()
 def ask(
     query: str = typer.Argument(..., help="The question to ask the selected AI provider"),
@@ -211,7 +299,7 @@ def ask(
     provider: Optional[str] = typer.Option(
         None,
         "--provider",
-        help="Provider override: perplexity, nvidia, or openrouter",
+        help="Provider override: perplexity, nvidia, openrouter, or ollama",
     ),
     model: str = typer.Option(
         None,
@@ -225,72 +313,89 @@ def ask(
     web: bool = typer.Option(False, "--web", help="With --wiki, supplement the answer with Perplexity web research"),
 ):
     """Ask a question to the configured AI provider and get a response."""
-    try:
-        selected_provider = get_provider_from_name(provider)
-        settings = get_provider_settings(selected_provider)
-        ensure_api_key(selected_provider)
-        selected_model = get_model_for_provider(model, selected_provider)
-        model_name = (
-            selected_model.value
-            if isinstance(selected_model, PerplexityModel)
-            else selected_model or Config.get_instance().get_default_model(selected_provider)
-        )
-
-        if verbose:
-            typer.echo(f"Using provider: {settings.display_name}")
-            typer.echo(f"Using model: {model_name}")
-
-        if wiki:
-            if web:
-                ensure_api_key(Provider.PERPLEXITY)
-            typer.echo(f"Querying wiki evidence with {settings.display_name}...")
-            answer = WikiWorkspace(wiki).query(
-                query,
-                model=selected_model,
-                provider=selected_provider,
-                web=web,
-            )
-            response = answer.content
-            typer.echo(f"Answer: {response}")
-            typer.echo("\nLocal evidence:")
-            for result in answer.local_results:
-                typer.echo(f"- {result.citation}")
-            if answer.web_completion:
-                typer.echo(f"\nWeb research:\n{answer.web_completion.content}")
-                for index, citation in enumerate(answer.web_completion.citations, start=1):
-                    typer.echo(f"- [W{index}] {citation}")
-        else:
-            if web:
-                raise typer.BadParameter("--web is only available with --wiki")
-            typer.echo(f"Querying {settings.display_name}...")
-            response = query_chat(
-                query, model=selected_model, provider=selected_provider
+    selected_provider = get_provider_from_name(provider)
+    if selected_provider == Provider.OLLAMA and web:
+        raise typer.BadParameter("--web is unavailable with Ollama local-only mode")
+    selected_model = get_model_for_provider(model, selected_provider)
+    with _provider_operation(selected_provider, selected_model):
+        try:
+            selected_provider = get_provider_from_name(provider)
+            settings = get_provider_settings(selected_provider)
+            ensure_api_key(selected_provider)
+            selected_model = get_model_for_provider(model, selected_provider)
+            model_name = (
+                selected_model.value
+                if isinstance(selected_model, PerplexityModel)
+                else selected_model or Config.get_instance().get_default_model(selected_provider)
             )
 
-        # Save to chat history if enabled
-        if save_history:
-            db = ChatHistoryDB()
-            conversation_id = db.create_conversation(title=query[:50] + "..." if len(query) > 50 else query, topic=topic)
-            db.add_message(conversation_id, "user", query)
-            db.add_message(conversation_id, "assistant", response)
+            if verbose:
+                typer.echo(f"Using provider: {settings.display_name}")
+                typer.echo(f"Using model: {model_name}")
+
+            if wiki:
+                if web:
+                    ensure_api_key(Provider.PERPLEXITY)
+                typer.echo(f"Querying wiki evidence with {settings.display_name}...")
+                answer = WikiWorkspace(wiki).query(
+                    query,
+                    model=selected_model,
+                    provider=selected_provider,
+                    web=web,
+                )
+                response = answer.content
+                typer.echo(f"Answer: {response}")
+                _print_answer_evidence(answer)
+                if answer.web_completion:
+                    typer.echo(f"\nWeb research:\n{answer.web_completion.content}")
+                    for index, citation in enumerate(answer.web_completion.citations, start=1):
+                        typer.echo(f"- [W{index}] {citation}")
+            else:
+                if web:
+                    raise typer.BadParameter("--web is only available with --wiki")
+                typer.echo(f"Querying {settings.display_name}...")
+                response = query_chat(
+                    query, model=selected_model, provider=selected_provider
+                )
+
+            # Save to chat history if enabled
+            if save_history:
+                db = ChatHistoryDB()
+                conversation_id = db.create_conversation(title=query[:50] + "..." if len(query) > 50 else query, topic=topic)
+                db.add_message(conversation_id, "user", query)
+                db.add_message(conversation_id, "assistant", response)
         
-        if not wiki:
-            typer.echo(f"Answer: {response}")
-    except Exception as e:
-        typer.echo(f"Error: {str(e)}", err=True)
-        raise typer.Exit(code=1)
+            if not wiki:
+                typer.echo(f"Answer: {response}")
+        except Exception as e:
+            _print_command_error(e)
+            raise typer.Exit(code=1)
 
 @app.command(name="list-models")
 def list_models(
     provider: Optional[str] = typer.Option(
         None,
         "--provider",
-        help="Provider to describe: perplexity, nvidia, or openrouter",
+        help="Provider to describe: perplexity, nvidia, openrouter, or ollama",
     )
 ):
     """List Perplexity aliases or describe native model selection."""
     selected_provider = get_provider_from_name(provider)
     settings = get_provider_settings(selected_provider)
+
+    if selected_provider == Provider.OLLAMA:
+        try:
+            models = list_chat_models()
+        except OllamaError as error:
+            typer.echo(f"Ollama error: {error}", err=True)
+            raise typer.Exit(code=1) from error
+        default = Config.get_instance().get_default_model(Provider.OLLAMA)
+        typer.echo(f"Saved Ollama model: {default or '(none)'}")
+        if not models:
+            typer.echo("No compatible local chat models installed. Install one explicitly with 'ollama pull <model>'.")
+        for name in models:
+            typer.echo(f"- {name}")
+        return
 
     if selected_provider == Provider.PERPLEXITY:
         for model in PerplexityModel:
@@ -310,6 +415,7 @@ def version():
     typer.echo(f"Perplexity CLI version {version_str}")
 
 @app.command()
+@_local_default_command
 def note(
     title: str = typer.Option(..., "--title", help="Title of the note"),
     content: str = typer.Option(..., "--content", help="Content of the note"),
@@ -390,7 +496,7 @@ def ask_notes(
     provider: Optional[str] = typer.Option(
         None,
         "--provider",
-        help="Provider override: perplexity, nvidia, or openrouter",
+        help="Provider override: perplexity, nvidia, openrouter, or ollama",
     ),
     model: Optional[str] = typer.Option(
         None,
@@ -403,50 +509,81 @@ def ask_notes(
     )
 ):
     """Ask questions about your notes using RAG."""
-    config = Config.get_instance()
-    notes_dir = directory or config.notes_dir
-    db = NotesDB(notes_dir)
+    selected_provider = get_provider_from_name(provider)
+    selected_model = get_model_for_provider(model, selected_provider)
+    with _provider_operation(selected_provider, selected_model):
+        config = Config.get_instance()
+        notes_dir = directory or config.notes_dir
+        db = NotesDB(notes_dir)
     
-    # Find relevant notes
-    similar_notes = db.search_similar_notes(query, top_k=top_k)
+        # Find relevant notes
+        similar_notes = db.search_similar_notes(query, top_k=top_k)
     
-    if not similar_notes:
-        typer.echo("No relevant notes found.")
-        return
+        if not similar_notes:
+            typer.echo("No relevant notes found.")
+            return
     
-    # Prepare context from similar notes
-    context = "\n\n".join([
-        f"Note {note['id']} - {note['title']}:\n{note['content']}"
-        for note, similarity in similar_notes
-    ])
-    
-    # Prepare the prompt with context
-    prompt = f"""Based on the following notes, please answer this question: {query}
+        if selected_provider == Provider.OLLAMA:
+            try:
+                context_tokens = get_context_budget(selected_model)
+                output_tokens = get_output_budget(context_tokens)
+                evidence = []
+                for note, _ in similar_notes:
+                    item = Evidence(
+                        f"N{note['id']}",
+                        f"{db.db_path}#note-{note['id']} ({note['title']})",
+                        note['content'],
+                    )
+                    evidence.extend(split_evidence(
+                        item, query, context_tokens, output_tokens=output_tokens,
+                    ))
+                answer = grounded_answer(
+                    query, evidence,
+                    lambda prompt: query_chat(prompt, model=selected_model, provider=selected_provider),
+                    context_tokens=context_tokens, output_tokens=output_tokens,
+                )
+                typer.echo("\nAnswer based on your notes:")
+                typer.echo(answer.content)
+                typer.echo("\nLocal evidence:")
+                for item in answer.evidence:
+                    typer.echo(f"- [{item.id}] {item.locator}\n{item.excerpt}")
+                if answer.omitted:
+                    typer.echo(f"Omitted {answer.omitted} evidence excerpt(s) to fit the model context.")
+                return
+            except (ValueError, RuntimeError) as error:
+                _print_command_error(error)
+                raise typer.Exit(code=1)
 
-Relevant Notes:
-{context}
-
-Please provide a comprehensive answer based solely on the information in these notes."""
+        # Preserve the existing hosted-provider prompt and note references.
+        context = "\n\n".join([
+            f"Note {note['id']} - {note['title']}:\n{note['content']}"
+            for note, similarity in similar_notes
+        ])
     
-    # Get a response from the selected chat provider.
-    try:
-        selected_provider = get_provider_from_name(provider)
-        ensure_api_key(selected_provider)
-        selected_model = get_model_for_provider(model, selected_provider)
-        response = query_chat(
-            prompt, model=selected_model, provider=selected_provider
-        )
+        # Prepare the prompt with context
+        prompt = (f"Based on the following notes, please answer this question: {query}\n\n"
+                  f"Relevant Notes:\n{context}\n\n"
+                  "Please provide a comprehensive answer based solely on the information in these notes.")
+
+        # Get a response from the selected chat provider.
+        try:
+            selected_provider = get_provider_from_name(provider)
+            ensure_api_key(selected_provider)
+            selected_model = get_model_for_provider(model, selected_provider)
+            response = query_chat(
+                prompt, model=selected_model, provider=selected_provider
+            )
         
-        # Print the response with relevant note references
-        typer.echo("\n🤖 Answer based on your notes:")
-        typer.echo("=" * 40)
-        typer.echo(response)
-        typer.echo("\n📚 Based on these notes:")
-        for note, similarity in similar_notes:
-            typer.echo(f"- Note {note['id']}: {note['title']} (relevance: {similarity:.2f})")
-    except Exception as e:
-        typer.echo(f"Error getting response: {str(e)}")
-        raise typer.Exit(code=1)
+            # Print the response with relevant note references
+            typer.echo("\n🤖 Answer based on your notes:")
+            typer.echo("=" * 40)
+            typer.echo(response)
+            typer.echo("\n📚 Based on these notes:")
+            for note, similarity in similar_notes:
+                typer.echo(f"- Note {note['id']}: {note['title']} (relevance: {similarity:.2f})")
+        except Exception as e:
+            typer.echo(f"Error getting response: {str(e)}")
+            raise typer.Exit(code=1)
 
 @app.command(name="history")
 def list_history(
@@ -606,6 +743,7 @@ def get_rag_db() -> RagDB:
 
 
 @rag_app.command("search", hidden=True)
+@_local_default_command
 def rag_search(
     query_parts: List[str] = typer.Argument(..., help="Search query"),
     mode: str = typer.Option("hybrid", "--mode", help="Search mode: vector, keyword, or hybrid"),
@@ -690,6 +828,7 @@ def rag_search(
 
 
 @app.command(name="rag-migrate")
+@_local_default_command
 def rag_migrate(
     source: str = typer.Option("both", "--source", help="Migration source: notes, chats, or both"),
     clear: bool = typer.Option(False, "--clear", help="Clear existing RAG data before migration"),
@@ -778,6 +917,7 @@ def rag_migrate(
 
 
 @app.command(name="rag-stats")
+@_local_default_command
 def rag_stats():
     """Show RAG database statistics."""
     try:
@@ -822,6 +962,7 @@ def rag_stats():
 
 
 @app.command(name="rag-index")
+@_local_default_command
 def rag_index(
     clear: bool = typer.Option(False, "--clear", help="Clear existing vector indices before reindexing")
 ):
@@ -848,6 +989,7 @@ def rag_index(
 
 
 @app.command(name="rag-config")
+@_local_default_command
 def rag_config(
     model: Optional[str] = typer.Option(None, "--model", help="Embedding model: small, base, or large"),
     device: Optional[str] = typer.Option(None, "--device", help="Device: cpu, cuda, or mps"),
@@ -941,6 +1083,18 @@ def _wiki_workspace(directory: Path) -> WikiWorkspace:
     return WikiWorkspace.initialize(directory)
 
 
+def _print_answer_evidence(answer) -> None:
+    typer.echo("\nLocal evidence:")
+    for result in answer.local_results:
+        typer.echo(f"- {result.citation}")
+        excerpt = getattr(result, "content", "")
+        if excerpt:
+            typer.echo(excerpt)
+    omitted = getattr(answer, "omitted_evidence", 0)
+    if omitted:
+        typer.echo(f"Omitted {omitted} evidence excerpt(s) to fit the model context.")
+
+
 def _print_wiki_results(results) -> None:
     if not results:
         typer.echo("No evidence found.")
@@ -953,6 +1107,7 @@ def _print_wiki_results(results) -> None:
 
 
 @wiki_app.command("init")
+@_local_default_command
 def wiki_init(
     directory: Path = typer.Option(..., "--dir", help="Directory that will hold source files, wiki/, and .pplx/")
 ):
@@ -964,12 +1119,15 @@ def wiki_init(
 
 
 @wiki_app.command("ingest")
+@_local_default_command
 def wiki_ingest(
-    sources: List[str] = typer.Argument(..., help="Markdown/PDF file, directory, or HTTP(S) URL"),
+    sources: List[str] = typer.Argument(..., help="Markdown/text/PDF file, directory, or HTTP(S) URL"),
     directory: Path = typer.Option(..., "--dir", help="Initialized wiki workspace directory"),
     tag: Optional[List[str]] = typer.Option(None, "--tag", help="Tag source metadata for later filtering"),
 ):
-    """Ingest Markdown, text PDFs, or a captured web page into the local index."""
+    """Ingest local documents or explicitly capture a web page."""
+    if local_only_enabled() and any(source.lower().startswith(("http://", "https://")) for source in sources):
+        raise typer.BadParameter("Live URL capture is unavailable while Ollama is the default local-only provider. Use already captured sources or an explicitly online configuration.")
     workspace = _wiki_workspace(directory)
     failed = False
     for source in sources:
@@ -987,6 +1145,7 @@ def wiki_ingest(
 
 
 @wiki_app.command("sync")
+@_local_default_command
 def wiki_sync(
     directory: Path = typer.Option(..., "--dir", help="Initialized wiki workspace directory")
 ):
@@ -1000,6 +1159,7 @@ def wiki_sync(
 
 
 @wiki_app.command("watch")
+@_local_default_command
 def wiki_watch(
     directory: Path = typer.Option(..., "--dir", help="Initialized wiki workspace directory"),
     interval: float = typer.Option(1.0, "--interval", min=0.2, help="Polling debounce in seconds"),
@@ -1024,23 +1184,27 @@ def wiki_compile(
 ):
     """Compile indexed sources into interlinked Markdown pages with source footnotes."""
     selected_provider = get_provider_from_name(provider)
-    ensure_api_key(selected_provider)
     selected_model = get_model_for_provider(model, selected_provider)
-    pages = _wiki_workspace(directory).compile(
-        provider=selected_provider, model=selected_model, dry_run=dry_run
-    )
-    action = "Would generate" if dry_run else "Generated"
-    typer.echo(f"{action} {len(pages)} page(s):")
-    for page in pages:
-        typer.echo(f"- {page}")
+    with _provider_operation(selected_provider, selected_model):
+        selected_provider = get_provider_from_name(provider)
+        ensure_api_key(selected_provider)
+        selected_model = get_model_for_provider(model, selected_provider)
+        pages = _wiki_workspace(directory).compile(
+            provider=selected_provider, model=selected_model, dry_run=dry_run
+        )
+        action = "Would generate" if dry_run else "Generated"
+        typer.echo(f"{action} {len(pages)} page(s):")
+        for page in pages:
+            typer.echo(f"- {page}")
 
 
 @wiki_app.command("search")
+@_local_default_command
 def wiki_search(
     query: str = typer.Argument(..., help="Search query"),
     directory: Path = typer.Option(..., "--dir", help="Initialized wiki workspace directory"),
     limit: int = typer.Option(10, "--limit", min=1, max=50),
-    source_type: Optional[List[str]] = typer.Option(None, "--source-type", help="Restrict to markdown, pdf, or web"),
+    source_type: Optional[List[str]] = typer.Option(None, "--source-type", help="Restrict to markdown, text, pdf, or web"),
     tag: Optional[List[str]] = typer.Option(None, "--tag", help="Require source metadata tags"),
 ):
     """Run fast hybrid search over authoritative wiki sources."""
@@ -1062,25 +1226,28 @@ def wiki_query(
 ):
     """Answer from local evidence, optionally followed by distinct web research."""
     selected_provider = get_provider_from_name(provider)
-    ensure_api_key(selected_provider)
-    if web:
-        ensure_api_key(Provider.PERPLEXITY)
+    if selected_provider == Provider.OLLAMA and web:
+        raise typer.BadParameter("--web is unavailable with Ollama local-only mode")
     selected_model = get_model_for_provider(model, selected_provider)
-    answer = _wiki_workspace(directory).query(
-        question,
-        provider=selected_provider,
-        model=selected_model,
-        web=web,
-        limit=limit,
-    )
-    typer.echo(answer.content)
-    typer.echo("\nLocal evidence:")
-    for result in answer.local_results:
-        typer.echo(f"- {result.citation}")
-    if answer.web_completion:
-        typer.echo(f"\nWeb research:\n{answer.web_completion.content}")
-        for index, citation in enumerate(answer.web_completion.citations, start=1):
-            typer.echo(f"- [W{index}] {citation}")
+    with _provider_operation(selected_provider, selected_model):
+        selected_provider = get_provider_from_name(provider)
+        ensure_api_key(selected_provider)
+        if web:
+            ensure_api_key(Provider.PERPLEXITY)
+        selected_model = get_model_for_provider(model, selected_provider)
+        answer = _wiki_workspace(directory).query(
+            question,
+            provider=selected_provider,
+            model=selected_model,
+            web=web,
+            limit=limit,
+        )
+        typer.echo(answer.content)
+        _print_answer_evidence(answer)
+        if answer.web_completion:
+            typer.echo(f"\nWeb research:\n{answer.web_completion.content}")
+            for index, citation in enumerate(answer.web_completion.citations, start=1):
+                typer.echo(f"- [W{index}] {citation}")
 
 
 @wiki_app.command("status")
@@ -1123,6 +1290,7 @@ def wiki_graph(
 
 
 @wiki_app.command("eval")
+@_local_default_command
 def wiki_eval(
     dataset: Path = typer.Option(..., "--dataset", exists=True, readable=True, help="JSONL query/relevant_source_ids set"),
     directory: Path = typer.Option(..., "--dir", help="Initialized wiki workspace directory"),
@@ -1134,6 +1302,7 @@ def wiki_eval(
 
 
 @wiki_app.command("mcp")
+@_local_default_command
 def wiki_mcp(
     directory: Path = typer.Option(..., "--dir", help="Initialized wiki workspace directory")
 ):
@@ -1142,6 +1311,7 @@ def wiki_mcp(
 
 
 @app.command(name="rag-eval")
+@_local_default_command
 def rag_eval(
     dataset: Path = typer.Option(..., "--dataset", exists=True, readable=True, help="JSONL query/relevant_source_ids set"),
     directory: Path = typer.Option(..., "--dir", help="Wiki workspace to evaluate"),
@@ -1153,6 +1323,7 @@ def rag_eval(
 
 
 @rag_app.command("eval")
+@_local_default_command
 def rag_nested_eval(
     dataset: Path = typer.Option(..., "--dataset", exists=True, readable=True, help="JSONL query/relevant_source_ids set"),
     directory: Path = typer.Option(..., "--dir", help="Wiki workspace to evaluate"),

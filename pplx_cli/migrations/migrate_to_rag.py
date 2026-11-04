@@ -12,11 +12,12 @@ from pathlib import Path
 from typing import Optional
 import argparse
 
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+if not __package__:
+    # Preserve direct script execution while importing the package by its full name.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from rag import RagDB, BatchIndexer
-from config import Config
+from pplx_cli.rag import RagDB, BatchIndexer
+from pplx_cli.config import Config
 
 # Configure logging
 logging.basicConfig(

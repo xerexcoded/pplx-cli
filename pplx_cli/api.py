@@ -34,9 +34,21 @@ def query_chat_completion(
     """Send a completion request and retain provider citations and usage details."""
     config = Config.get_instance()
     selected_provider = normalize_provider(provider or config.provider)
+    from .local import local_only_enabled
+    if local_only_enabled() and selected_provider != Provider.OLLAMA:
+        raise ValueError("Remote generation is forbidden in local-only mode")
     settings = get_provider_settings(selected_provider)
-    api_key = config.get_api_key(selected_provider)
+    selected_model = model.value if isinstance(model, PerplexityModel) else model
+    if selected_provider == Provider.OLLAMA:
+        from .ollama import chat
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+        content, payload = chat(messages, selected_model)
+        return ChatCompletion(content=content, model=payload.get("model") or selected_model)
 
+    api_key = config.get_api_key(selected_provider)
     if not api_key:
         raise ValueError(
             f"API key not found for {settings.display_name}. "
